@@ -1,0 +1,43 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <title>WhatsApp ML Bot</title>
+  <defs>
+    <linearGradient id="bg" x1="64" y1="64" x2="448" y2="448" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#0B1220"/>
+      <stop offset="1" stop-color="#0B766D"/>
+    </linearGradient>
+    <filter id="shadow" x="0" y="0" width="512" height="512" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feOffset dy="10"/>
+      <feGaussianBlur stdDeviation="14"/>
+      <feColorMatrix type="matrix" values="0 0 0 0 0   0 0 0 0 0   0 0 0 0 0   0 0 0 0.22 0"/>
+      <feBlend mode="normal" in2="SourceGraphic" result="shape"/>
+    </filter>
+  </defs>
+
+  <!-- Background -->
+  <rect x="32" y="32" width="448" height="448" rx="112" fill="url(#bg)"/>
+
+  <!-- Bubble + tag -->
+  <g filter="url(#shadow)">
+    <!-- Bubble -->
+    <path
+      d="M196 140H332C386.2 140 430 183.8 430 238V274C430 328.2 386.2 372 332 372H256L180 432L206 372H196C141.8 372 98 328.2 98 274V238C98 183.8 141.8 140 196 140Z"
+      fill="#F8FAFC"
+    />
+    <!-- Tag -->
+    <path
+      d="M222 214H338L382 256L338 298H222L178 256L222 214Z"
+      fill="#0F172A"
+      opacity="0.92"
+    />
+    <circle cx="212" cy="256" r="10" fill="#F8FAFC" opacity="0.95"/>
+    <path d="M262 242H344" stroke="#F8FAFC" stroke-width="14" stroke-linecap="round" opacity="0.95"/>
+    <path d="M262 270H324" stroke="#F8FAFC" stroke-width="14" stroke-linecap="round" opacity="0.95"/>
+  </g>
+
+  <!-- Spark -->
+  <path
+    d="M396 144L406 168L430 178L406 188L396 212L386 188L362 178L386 168L396 144Z"
+    fill="#FBBF24"
+  />
+</svg>
+

@@ -1,0 +1,22 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <title>WhatsApp ML Bot (Mark)</title>
+
+  <!-- Bubble -->
+  <path
+    d="M196 140H332C386.2 140 430 183.8 430 238V274C430 328.2 386.2 372 332 372H256L180 432L206 372H196C141.8 372 98 328.2 98 274V238C98 183.8 141.8 140 196 140Z"
+    fill="#0B1220"
+  />
+
+  <!-- Tag -->
+  <path d="M222 214H338L382 256L338 298H222L178 256L222 214Z" fill="#F8FAFC"/>
+  <circle cx="212" cy="256" r="10" fill="#0B1220"/>
+  <path d="M262 242H344" stroke="#0B1220" stroke-width="14" stroke-linecap="round"/>
+  <path d="M262 270H324" stroke="#0B1220" stroke-width="14" stroke-linecap="round"/>
+
+  <!-- Spark -->
+  <path
+    d="M396 144L406 168L430 178L406 188L396 212L386 188L362 178L386 168L396 144Z"
+    fill="#FBBF24"
+  />
+</svg>
+
