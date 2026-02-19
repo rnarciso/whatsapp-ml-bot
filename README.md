@@ -61,6 +61,31 @@ npm run dev
 - `http://127.0.0.1:8787`
 - Se `ADMIN_WEB_TOKEN` estiver definido: `http://127.0.0.1:8787/?token=SEU_TOKEN`
 
+## Imagem Docker no GHCR
+
+O repositório agora publica imagem Docker automaticamente no GitHub Container Registry (GHCR) via workflow:
+
+- Arquivo: `.github/workflows/docker-publish.yml`
+- Dispara em push para `main`, tags `v*` e execução manual
+- Publica multi-arquitetura (`linux/amd64` e `linux/arm64`)
+
+Imagem:
+
+- `ghcr.io/rnarciso/whatsapp-ml-bot:latest` (branch principal)
+- `ghcr.io/rnarciso/whatsapp-ml-bot:main`
+- `ghcr.io/rnarciso/whatsapp-ml-bot:sha-<commit>`
+
+Se o pacote no GHCR estiver privado, marque como público no GitHub (Package settings) ou configure credenciais de pull no seu ambiente.
+
+## Portainer com imagem pronta (sem build)
+
+Use o arquivo `portainer-stack-ghcr.yml`:
+
+- Repositório: `https://github.com/rnarciso/whatsapp-ml-bot.git`
+- Reference: `refs/heads/main`
+- Compose path: `portainer-stack-ghcr.yml`
+- Variável opcional: `BOT_IMAGE_TAG` (default `latest`)
+
 ## Como obter `ML_REFRESH_TOKEN`
 
 1. No painel de dev do Mercado Livre, configure um `redirect_uri` no seu app (ex.: `http://localhost:3333/callback`).

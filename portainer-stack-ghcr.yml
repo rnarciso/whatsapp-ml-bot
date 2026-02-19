@@ -1,0 +1,79 @@
+version: "3.8"
+
+services:
+  whatsapp-ml-bot:
+    # Pre-built image published by GitHub Actions.
+    image: "ghcr.io/rnarciso/whatsapp-ml-bot:${BOT_IMAGE_TAG:-latest}"
+    restart: unless-stopped
+
+    # Admin web (config não sensível)
+    ports:
+      - "8787:8787"
+
+    volumes:
+      - whatsapp_ml_bot_data:/app/data
+
+    # If you need to reach services on the Docker host (Linux), use:
+    # OPENAI_BASE_URL=http://host.docker.internal:4000/v1
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+    environment:
+      # General
+      LOG_LEVEL: "${LOG_LEVEL:-info}"
+
+      # Data paths (defaults would work, but keep explicit for clarity)
+      DATA_DIR: "/app/data"
+      WA_SESSION_DIR: "/app/data/wa_auth"
+
+      # WhatsApp / safety
+      WA_ALLOWED_GROUP_IDS: "${WA_ALLOWED_GROUP_IDS:-}"
+      PHOTO_COLLECT_WINDOW_SEC: "${PHOTO_COLLECT_WINDOW_SEC:-45}"
+      WA_REQUIRE_COMMAND_FOR_IMAGES: "${WA_REQUIRE_COMMAND_FOR_IMAGES:-true}"
+      WA_MAX_IMAGE_BYTES: "${WA_MAX_IMAGE_BYTES:-10000000}"
+
+      # Anti-spam / human-like delays (recommended when using Baileys)
+      WA_HUMAN_DELAY_MS_MIN: "${WA_HUMAN_DELAY_MS_MIN:-1000}"
+      WA_HUMAN_DELAY_MS_MAX: "${WA_HUMAN_DELAY_MS_MAX:-3000}"
+      WA_SEND_INTERVAL_MS: "${WA_SEND_INTERVAL_MS:-1000}"
+      WA_SEND_INTERVAL_CAP: "${WA_SEND_INTERVAL_CAP:-3}"
+
+      # Admin web (bind 0.0.0.0 so it is reachable from outside the container)
+      ADMIN_WEB_ENABLED: "${ADMIN_WEB_ENABLED:-true}"
+      ADMIN_WEB_HOST: "${ADMIN_WEB_HOST:-0.0.0.0}"
+      ADMIN_WEB_PORT: "${ADMIN_WEB_PORT:-8787}"
+      # Optional: set a token and open http://HOST:8787/?token=...
+      ADMIN_WEB_TOKEN: "${ADMIN_WEB_TOKEN:-}"
+
+      # OpenAI / OpenAI-compatible (LiteLLM etc)
+      # Example: http://docker.lan:4000/v1  (or http://host.docker.internal:4000/v1)
+      OPENAI_BASE_URL: "${OPENAI_BASE_URL:-}"
+      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
+      OPENAI_MODEL_VISION: "${OPENAI_MODEL_VISION:-gpt-4o-mini}"
+
+      # Mercado Livre
+      ML_SITE_ID: "${ML_SITE_ID:-MLB}"
+      ML_CLIENT_ID: "${ML_CLIENT_ID:-}"
+      ML_CLIENT_SECRET: "${ML_CLIENT_SECRET:-}"
+      ML_REFRESH_TOKEN: "${ML_REFRESH_TOKEN:-}"
+
+      # Listing defaults
+      ML_CURRENCY_ID: "${ML_CURRENCY_ID:-BRL}"
+      ML_LISTING_TYPE_ID: "${ML_LISTING_TYPE_ID:-gold_special}"
+      ML_BUYING_MODE: "${ML_BUYING_MODE:-buy_it_now}"
+      ML_DEFAULT_QUANTITY: "${ML_DEFAULT_QUANTITY:-1}"
+
+      # Safe default: dry run first (no publishing)
+      ML_DRY_RUN: "${ML_DRY_RUN:-true}"
+
+      # Recommended: encrypt ML tokens at rest (db.json)
+      STORAGE_ENCRYPTION_KEY: "${STORAGE_ENCRYPTION_KEY:-}"
+
+      # Retention / cleanup defaults (can be changed via web/chat)
+      MEDIA_RETENTION_HOURS: "${MEDIA_RETENTION_HOURS:-168}"
+      SESSION_INACTIVE_HOURS: "${SESSION_INACTIVE_HOURS:-72}"
+      SESSION_RETENTION_DAYS: "${SESSION_RETENTION_DAYS:-90}"
+      CLEANUP_INTERVAL_MIN: "${CLEANUP_INTERVAL_MIN:-360}"
+
+volumes:
+  whatsapp_ml_bot_data:
