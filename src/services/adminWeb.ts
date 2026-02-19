@@ -1,10 +1,21 @@
 import http from 'node:http';
 import { URL, URLSearchParams } from 'node:url';
+import QRCode from 'qrcode';
 
 import { config } from '../config.js';
 import { logger } from '../logger.js';
 import type { AppSettings } from '../types.js';
 import type { SettingsService } from './settings.js';
+
+type WhatsAppConnectionSnapshot = {
+  state: 'connecting' | 'open' | 'closed';
+  qrText: string | null;
+  qrUpdatedAt: number | null;
+};
+
+type WhatsAppStatusProvider = {
+  getConnectionSnapshot(): WhatsAppConnectionSnapshot;
+};
 
 const LOGO_MARK = `
 <svg class="logo" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
@@ -26,7 +37,12 @@ function esc(s: string): string {
     .replaceAll("'", '&#39;');
 }
 
-function renderHtml(settings: AppSettings, flash?: string, token?: string): string {
+function renderHtml(
+  settings: AppSettings,
+  wa: { stateLabel: string; qrDataUrl: string | null; qrUpdatedAtLabel: string | null },
+  flash?: string,
+  token?: string,
+): string {
   const tokenQuery = token ? `?token=${encodeURIComponent(token)}` : '';
   const checked = settings.require_command_for_images ? 'checked' : '';
   return `<!doctype html>
@@ -52,7 +68,11 @@ function renderHtml(settings: AppSettings, flash?: string, token?: string): stri
       .flash { margin: 0 0 12px; border:1px solid #a7f3d0; background:var(--okbg); color:var(--ok); border-radius:8px; padding:10px; font-size:14px; }
       .muted { color:var(--muted); font-size:13px; }
       code { background:#f3f4f6; padding:2px 6px; border-radius:6px; }
-    </style>
+      .wa-panel { border:1px solid var(--line); border-radius:10px; padding:12px; margin: 0 0 14px; background:#fafafa; }
+      .wa-state { margin: 0 0 10px; font-size:14px; }
+      .wa-qr { display:flex; gap:12px; align-items:flex-start; flex-wrap:wrap; }
+      .wa-qr img { width: 220px; height: 220px; border:1px solid var(--line); border-radius:10px; background:#fff; }
+	    </style>
   </head>
 	  <body>
 	    <main>
@@ -65,6 +85,20 @@ function renderHtml(settings: AppSettings, flash?: string, token?: string): stri
 	          </div>
 	        </div>
 	        ${flash ? `<div class="flash">${esc(flash)}</div>` : ''}
+          <div class="wa-panel">
+            <p class="wa-state"><strong>WhatsApp:</strong> ${esc(wa.stateLabel)}</p>
+            ${
+              wa.qrDataUrl
+                ? `<div class="wa-qr">
+                    <img src="${wa.qrDataUrl}" alt="QR Code do WhatsApp" />
+                    <div>
+                      <p class="muted">Abra o WhatsApp no celular e escaneie este QR.</p>
+                      ${wa.qrUpdatedAtLabel ? `<p class="muted">Última atualização: ${esc(wa.qrUpdatedAtLabel)}</p>` : ''}
+                    </div>
+                  </div>`
+                : '<p class="muted">QR indisponível no momento. Se desconectado, recarregue a página ou reinicie o container.</p>'
+            }
+          </div>
 	        <form method="post" action="/settings${tokenQuery}">
           <label class="row">
             <input type="checkbox" name="require_command_for_images" value="1" ${checked} />
@@ -129,7 +163,31 @@ function checkToken(url: URL): boolean {
   return url.searchParams.get('token') === required;
 }
 
-export function startAdminWebServer(settingsService: SettingsService): http.Server | null {
+async function getWaView(waStatusProvider?: WhatsAppStatusProvider): Promise<{
+  stateLabel: string;
+  qrDataUrl: string | null;
+  qrUpdatedAtLabel: string | null;
+}> {
+  const snapshot = waStatusProvider?.getConnectionSnapshot() ?? {
+    state: 'closed',
+    qrText: null,
+    qrUpdatedAt: null,
+  };
+  const stateLabel =
+    snapshot.state === 'open'
+      ? 'conectado'
+      : snapshot.state === 'connecting'
+        ? 'aguardando pareamento'
+        : 'desconectado';
+  const qrDataUrl = snapshot.qrText ? await QRCode.toDataURL(snapshot.qrText, { margin: 1, width: 320 }) : null;
+  const qrUpdatedAtLabel = snapshot.qrUpdatedAt ? new Date(snapshot.qrUpdatedAt).toLocaleString('pt-BR') : null;
+  return { stateLabel, qrDataUrl, qrUpdatedAtLabel };
+}
+
+export function startAdminWebServer(
+  settingsService: SettingsService,
+  waStatusProvider?: WhatsAppStatusProvider,
+): http.Server | null {
   if (!config.adminWeb.enabled) return null;
 
   const server = http.createServer(async (req, res) => {
@@ -141,8 +199,9 @@ export function startAdminWebServer(settingsService: SettingsService): http.Serv
         return;
       }
 
-      if (req.method === 'GET' && url.pathname === '/') {
-        const html = renderHtml(settingsService.get(), undefined, config.adminWeb.token);
+      if (req.method === 'GET' && (url.pathname === '/' || url.pathname === '/settings')) {
+        const waView = await getWaView(waStatusProvider);
+        const html = renderHtml(settingsService.get(), waView, undefined, config.adminWeb.token);
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
         res.end(html);
         return;
@@ -161,7 +220,13 @@ export function startAdminWebServer(settingsService: SettingsService): http.Serv
           session_retention_days: parseIntOrThrow(params.get('session_retention_days'), 'session_retention_days'),
         };
         await settingsService.setMany(patch);
-        const html = renderHtml(settingsService.get(), 'Configuração salva com sucesso.', config.adminWeb.token);
+        const waView = await getWaView(waStatusProvider);
+        const html = renderHtml(
+          settingsService.get(),
+          waView,
+          'Configuração salva com sucesso.',
+          config.adminWeb.token,
+        );
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
         res.end(html);
         return;

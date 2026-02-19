@@ -68,7 +68,7 @@ async function main(): Promise<void> {
   await bot.start();
 
   startCleanupLoop(store, settings);
-  startAdminWebServer(settings);
+  startAdminWebServer(settings, bot);
 }
 
 main().catch((err) => {

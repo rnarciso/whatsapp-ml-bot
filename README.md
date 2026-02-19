@@ -54,7 +54,7 @@ cp .env.example .env
 npm run dev
 ```
 
-5. Escaneie o QR code no terminal para logar o WhatsApp do bot.
+5. Escaneie o QR code para logar o WhatsApp do bot (disponível nos logs e no painel web em `/settings`).
 
 6. (Opcional) Abra o painel web local de configuração:
 

@@ -126,6 +126,8 @@ function humanCondition(cond: string): string {
 
 export class WhatsAppMlBot {
   private sock: ReturnType<typeof makeWASocket> | null = null;
+  private connectionState: 'connecting' | 'open' | 'closed' = 'closed';
+  private latestQr: { value: string; updatedAt: number } | null = null;
   private analysisTimers = new Map<string, NodeJS.Timeout>();
   private queue = new PQueue({ concurrency: 2 });
   private startPromise: Promise<void> | null = null;
@@ -175,8 +177,14 @@ export class WhatsAppMlBot {
 
     sock.ev.on('creds.update', saveCreds);
     sock.ev.on('connection.update', (update) => {
-      const { connection, lastDisconnect } = update;
+      const { connection, lastDisconnect, qr } = update;
+      if (typeof qr === 'string' && qr.length > 0) {
+        this.latestQr = { value: qr, updatedAt: Date.now() };
+        this.connectionState = 'connecting';
+        logger.info('WhatsApp QR updated');
+      }
       if (connection === 'close') {
+        this.connectionState = 'closed';
         const statusCode = (lastDisconnect?.error as any)?.output?.statusCode;
         const reason = statusCode ? DisconnectReason[statusCode] : 'unknown';
         logger.warn({ statusCode, reason }, 'WhatsApp connection closed');
@@ -194,6 +202,8 @@ export class WhatsAppMlBot {
         return;
       }
       if (connection === 'open') {
+        this.connectionState = 'open';
+        this.latestQr = null;
         this.resetReconnectBackoff();
         logger.info('WhatsApp connected');
         void this.recoverSessionsOnConnect().catch((err) => {
@@ -211,6 +221,18 @@ export class WhatsAppMlBot {
     this.sock = sock;
 
     logger.info('Bot started');
+  }
+
+  getConnectionSnapshot(): {
+    state: 'connecting' | 'open' | 'closed';
+    qrText: string | null;
+    qrUpdatedAt: number | null;
+  } {
+    return {
+      state: this.connectionState,
+      qrText: this.latestQr?.value ?? null,
+      qrUpdatedAt: this.latestQr?.updatedAt ?? null,
+    };
   }
 
   private async recoverSessionsOnConnect(): Promise<void> {

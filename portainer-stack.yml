@@ -35,6 +35,12 @@ services:
       WA_REQUIRE_COMMAND_FOR_IMAGES: "${WA_REQUIRE_COMMAND_FOR_IMAGES:-true}"
       WA_MAX_IMAGE_BYTES: "${WA_MAX_IMAGE_BYTES:-10000000}"
 
+      # Anti-spam / human-like delays (recommended when using Baileys)
+      WA_HUMAN_DELAY_MS_MIN: "${WA_HUMAN_DELAY_MS_MIN:-1000}"
+      WA_HUMAN_DELAY_MS_MAX: "${WA_HUMAN_DELAY_MS_MAX:-3000}"
+      WA_SEND_INTERVAL_MS: "${WA_SEND_INTERVAL_MS:-1000}"
+      WA_SEND_INTERVAL_CAP: "${WA_SEND_INTERVAL_CAP:-3}"
+
       # Admin web (bind 0.0.0.0 so it is reachable from outside the container)
       ADMIN_WEB_ENABLED: "${ADMIN_WEB_ENABLED:-true}"
       ADMIN_WEB_HOST: "${ADMIN_WEB_HOST:-0.0.0.0}"
@@ -53,6 +59,12 @@ services:
       ML_CLIENT_ID: "${ML_CLIENT_ID:-}"
       ML_CLIENT_SECRET: "${ML_CLIENT_SECRET:-}"
       ML_REFRESH_TOKEN: "${ML_REFRESH_TOKEN:-}"
+
+      # Listing defaults
+      ML_CURRENCY_ID: "${ML_CURRENCY_ID:-BRL}"
+      ML_LISTING_TYPE_ID: "${ML_LISTING_TYPE_ID:-gold_special}"
+      ML_BUYING_MODE: "${ML_BUYING_MODE:-buy_it_now}"
+      ML_DEFAULT_QUANTITY: "${ML_DEFAULT_QUANTITY:-1}"
 
       # Safe default: dry run first (no publishing)
       ML_DRY_RUN: "${ML_DRY_RUN:-true}"
