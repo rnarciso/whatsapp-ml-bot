@@ -1,4 +1,5 @@
 import http from 'node:http';
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { URL, URLSearchParams } from 'node:url';
 import QRCode from 'qrcode';
 
@@ -16,6 +17,9 @@ type WhatsAppConnectionSnapshot = {
 type WhatsAppStatusProvider = {
   getConnectionSnapshot(): WhatsAppConnectionSnapshot;
 };
+
+const AUTH_COOKIE_NAME = 'mlbot_admin_session';
+const AUTH_COOKIE_MAX_AGE_SEC = 12 * 60 * 60;
 
 const LOGO_MARK = `
 <svg class="logo" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
@@ -41,9 +45,7 @@ function renderHtml(
   settings: AppSettings,
   wa: { stateLabel: string; qrDataUrl: string | null; qrUpdatedAtLabel: string | null },
   flash?: string,
-  token?: string,
 ): string {
-  const tokenQuery = token ? `?token=${encodeURIComponent(token)}` : '';
   const checked = settings.require_command_for_images ? 'checked' : '';
   return `<!doctype html>
 <html lang="pt-BR">
@@ -68,15 +70,22 @@ function renderHtml(
       .flash { margin: 0 0 12px; border:1px solid #a7f3d0; background:var(--okbg); color:var(--ok); border-radius:8px; padding:10px; font-size:14px; }
       .muted { color:var(--muted); font-size:13px; }
       code { background:#f3f4f6; padding:2px 6px; border-radius:6px; }
-      .wa-panel { border:1px solid var(--line); border-radius:10px; padding:12px; margin: 0 0 14px; background:#fafafa; }
-      .wa-state { margin: 0 0 10px; font-size:14px; }
-      .wa-qr { display:flex; gap:12px; align-items:flex-start; flex-wrap:wrap; }
-      .wa-qr img { width: 220px; height: 220px; border:1px solid var(--line); border-radius:10px; background:#fff; }
+	      .wa-panel { border:1px solid var(--line); border-radius:10px; padding:12px; margin: 0 0 14px; background:#fafafa; }
+	      .wa-state { margin: 0 0 10px; font-size:14px; }
+	      .wa-qr { display:flex; gap:12px; align-items:flex-start; flex-wrap:wrap; }
+	      .wa-qr img { width: 220px; height: 220px; border:1px solid var(--line); border-radius:10px; background:#fff; }
+        .toolbar { display:flex; justify-content:flex-end; margin-bottom: 12px; }
+        .btn-light { background:#fff; color:#111827; border:1px solid var(--line); }
 	    </style>
   </head>
 	  <body>
 	    <main>
 	      <div class="card">
+          <div class="toolbar">
+            <form method="post" action="/logout">
+              <button class="btn btn-light" type="submit">Sair</button>
+            </form>
+          </div>
 	        <div class="header">
 	          ${LOGO_MARK}
 	          <div>
@@ -99,7 +108,7 @@ function renderHtml(
                 : '<p class="muted">QR indisponível no momento. Se desconectado, recarregue a página ou reinicie o container.</p>'
             }
           </div>
-	        <form method="post" action="/settings${tokenQuery}">
+	        <form method="post" action="/settings">
           <label class="row">
             <input type="checkbox" name="require_command_for_images" value="1" ${checked} />
             Exigir <code>!ml-bot novo</code> antes de aceitar fotos
@@ -145,6 +154,53 @@ function renderHtml(
 </html>`;
 }
 
+function renderLoginHtml(flash?: string): string {
+  return `<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ML Bot Login</title>
+    <style>
+      :root { --bg:#f5f6f8; --card:#fff; --ink:#1f2937; --muted:#6b7280; --line:#e5e7eb; --err:#991b1b; --errbg:#fef2f2; }
+      body { margin:0; font-family: ui-sans-serif, -apple-system, Segoe UI, Roboto, sans-serif; background:var(--bg); color:var(--ink); }
+      main { min-height: 100vh; display:grid; place-items:center; padding: 16px; }
+      .card { width:min(420px, 100%); background: var(--card); border:1px solid var(--line); border-radius: 12px; padding: 20px; box-shadow: 0 1px 2px rgba(0,0,0,.04); }
+      .header { display:flex; align-items:center; gap:12px; margin: 0 0 12px; }
+      .logo { width: 42px; height: 42px; }
+      h1 { font-size: 20px; margin: 0 0 4px; }
+      p { color: var(--muted); margin: 0 0 16px; }
+      form { display:grid; gap:10px; }
+      label { display:grid; gap:4px; font-size: 14px; }
+      input[type=password] { border:1px solid var(--line); border-radius:8px; padding:10px; font-size:14px; }
+      .btn { border:0; background:#111827; color:#fff; border-radius:8px; padding:10px 14px; cursor:pointer; width: fit-content; }
+      .flash { margin: 0 0 12px; border:1px solid #fecaca; background:var(--errbg); color:var(--err); border-radius:8px; padding:10px; font-size:14px; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="card">
+        <div class="header">
+          ${LOGO_MARK}
+          <div>
+            <h1>Acesso ao Painel</h1>
+            <p>Entre para visualizar configurações e QR do WhatsApp.</p>
+          </div>
+        </div>
+        ${flash ? `<div class="flash">${esc(flash)}</div>` : ''}
+        <form method="post" action="/login">
+          <label>
+            Senha do painel
+            <input type="password" name="password" autocomplete="current-password" required />
+          </label>
+          <button class="btn" type="submit">Entrar</button>
+        </form>
+      </div>
+    </main>
+  </body>
+</html>`;
+}
+
 async function readBody(req: http.IncomingMessage): Promise<string> {
   let body = '';
   for await (const chunk of req) body += chunk;
@@ -157,10 +213,70 @@ function parseIntOrThrow(v: string | null, key: string): number {
   return n;
 }
 
-function checkToken(url: URL): boolean {
-  const required = config.adminWeb.token;
-  if (!required) return true;
-  return url.searchParams.get('token') === required;
+function safeEqual(a: string, b: string): boolean {
+  const aBuf = Buffer.from(a);
+  const bBuf = Buffer.from(b);
+  if (aBuf.length !== bBuf.length) return false;
+  return timingSafeEqual(aBuf, bBuf);
+}
+
+function parseCookies(raw: string | undefined): Record<string, string> {
+  if (!raw) return {};
+  const out: Record<string, string> = {};
+  for (const item of raw.split(';')) {
+    const i = item.indexOf('=');
+    if (i <= 0) continue;
+    const key = item.slice(0, i).trim();
+    const value = item.slice(i + 1).trim();
+    if (!key) continue;
+    try {
+      out[key] = decodeURIComponent(value);
+    } catch {
+      out[key] = value;
+    }
+  }
+  return out;
+}
+
+function isSecureRequest(req: http.IncomingMessage): boolean {
+  const proto = req.headers['x-forwarded-proto'];
+  if (Array.isArray(proto)) return proto[0] === 'https';
+  return typeof proto === 'string' && proto.split(',')[0]?.trim() === 'https';
+}
+
+function buildAuthCookie(value: string, secure: boolean): string {
+  const parts = [
+    `${AUTH_COOKIE_NAME}=${encodeURIComponent(value)}`,
+    'Path=/',
+    'HttpOnly',
+    'SameSite=Lax',
+    `Max-Age=${AUTH_COOKIE_MAX_AGE_SEC}`,
+  ];
+  if (secure) parts.push('Secure');
+  return parts.join('; ');
+}
+
+function clearAuthCookie(secure: boolean): string {
+  const parts = [
+    `${AUTH_COOKIE_NAME}=`,
+    'Path=/',
+    'HttpOnly',
+    'SameSite=Lax',
+    'Max-Age=0',
+  ];
+  if (secure) parts.push('Secure');
+  return parts.join('; ');
+}
+
+function hashSession(adminToken: string, sessionSecret: string): string {
+  return createHash('sha256').update(adminToken).update(':').update(sessionSecret).digest('hex');
+}
+
+function hasValidSession(req: http.IncomingMessage, expected: string): boolean {
+  const cookies = parseCookies(req.headers.cookie);
+  const got = cookies[AUTH_COOKIE_NAME];
+  if (!got) return false;
+  return safeEqual(got, expected);
 }
 
 async function getWaView(waStatusProvider?: WhatsAppStatusProvider): Promise<{
@@ -189,20 +305,71 @@ export function startAdminWebServer(
   waStatusProvider?: WhatsAppStatusProvider,
 ): http.Server | null {
   if (!config.adminWeb.enabled) return null;
+  const adminToken = config.adminWeb.token?.trim();
+  if (!adminToken) {
+    logger.warn('Admin web disabled: set ADMIN_WEB_TOKEN to enable authenticated access.');
+    return null;
+  }
+  const sessionSecret = randomBytes(32).toString('hex');
+  const expectedSession = hashSession(adminToken, sessionSecret);
 
   const server = http.createServer(async (req, res) => {
     try {
       const url = new URL(req.url ?? '/', `http://${config.adminWeb.host}:${config.adminWeb.port}`);
-      if (!checkToken(url)) {
-        res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
-        res.end('Forbidden');
+
+      if (req.method === 'GET' && url.pathname === '/login') {
+        if (hasValidSession(req, expectedSession)) {
+          res.writeHead(303, { Location: '/settings' });
+          res.end();
+          return;
+        }
+        const html = renderLoginHtml();
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+        res.end(html);
+        return;
+      }
+
+      if (req.method === 'POST' && url.pathname === '/login') {
+        const body = await readBody(req);
+        const params = new URLSearchParams(body);
+        const password = params.get('password') ?? '';
+        if (!safeEqual(password, adminToken)) {
+          const html = renderLoginHtml('Senha inválida.');
+          res.writeHead(401, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+          res.end(html);
+          return;
+        }
+        const secure = isSecureRequest(req);
+        res.writeHead(303, {
+          Location: '/settings',
+          'Set-Cookie': buildAuthCookie(expectedSession, secure),
+          'Cache-Control': 'no-store',
+        });
+        res.end();
+        return;
+      }
+
+      if (req.method === 'POST' && url.pathname === '/logout') {
+        const secure = isSecureRequest(req);
+        res.writeHead(303, {
+          Location: '/login',
+          'Set-Cookie': clearAuthCookie(secure),
+          'Cache-Control': 'no-store',
+        });
+        res.end();
+        return;
+      }
+
+      if (!hasValidSession(req, expectedSession)) {
+        res.writeHead(303, { Location: '/login', 'Cache-Control': 'no-store' });
+        res.end();
         return;
       }
 
       if (req.method === 'GET' && (url.pathname === '/' || url.pathname === '/settings')) {
         const waView = await getWaView(waStatusProvider);
-        const html = renderHtml(settingsService.get(), waView, undefined, config.adminWeb.token);
-        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+        const html = renderHtml(settingsService.get(), waView);
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
         res.end(html);
         return;
       }
@@ -221,13 +388,8 @@ export function startAdminWebServer(
         };
         await settingsService.setMany(patch);
         const waView = await getWaView(waStatusProvider);
-        const html = renderHtml(
-          settingsService.get(),
-          waView,
-          'Configuração salva com sucesso.',
-          config.adminWeb.token,
-        );
-        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+        const html = renderHtml(settingsService.get(), waView, 'Configuração salva com sucesso.');
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
         res.end(html);
         return;
       }
@@ -242,8 +404,7 @@ export function startAdminWebServer(
   });
 
   server.listen(config.adminWeb.port, config.adminWeb.host, () => {
-    const tokenPart = config.adminWeb.token ? `?token=${encodeURIComponent(config.adminWeb.token)}` : '';
-    logger.info({ url: `http://${config.adminWeb.host}:${config.adminWeb.port}/${tokenPart}` }, 'Admin web started');
+    logger.info({ url: `http://${config.adminWeb.host}:${config.adminWeb.port}/login` }, 'Admin web started');
   });
 
   return server;

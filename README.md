@@ -44,7 +44,8 @@ cp .env.example .env
 - (Opcional, recomendado em grupos "não dedicados"): `WA_REQUIRE_COMMAND_FOR_IMAGES=true` para só processar fotos após `!ml-bot novo`
 - (Opcional): `WA_MAX_IMAGE_BYTES` para limitar o tamanho das imagens aceitas (evita DoS por imagens gigantes)
 - (Opcional): `STORAGE_ENCRYPTION_KEY` para criptografar os tokens do Mercado Livre no `db.json`
-- (Opcional): painel web local (`ADMIN_WEB_ENABLED`, `ADMIN_WEB_HOST`, `ADMIN_WEB_PORT`, `ADMIN_WEB_TOKEN`)
+- (Opcional): painel web local (`ADMIN_WEB_ENABLED`, `ADMIN_WEB_HOST`, `ADMIN_WEB_PORT`)
+- `ADMIN_WEB_TOKEN` (obrigatório quando `ADMIN_WEB_ENABLED=true`)
 - (Opcional) review via Gemini: ter o `gemini` CLI instalado e logado (opcional: `GEMINI_MODEL`)
 - (Opcional) retenção/limpeza: `MEDIA_RETENTION_HOURS`, `SESSION_INACTIVE_HOURS`, `SESSION_RETENTION_DAYS`
 
@@ -58,8 +59,8 @@ npm run dev
 
 6. (Opcional) Abra o painel web local de configuração:
 
-- `http://127.0.0.1:8787`
-- Se `ADMIN_WEB_TOKEN` estiver definido: `http://127.0.0.1:8787/?token=SEU_TOKEN`
+- `http://127.0.0.1:8787/login`
+- Entre com a senha definida em `ADMIN_WEB_TOKEN`
 
 ## Imagem Docker no GHCR
 
