@@ -211,6 +211,11 @@ export class WhatsAppMlBot {
         logger.warn({ statusCode, reason }, 'WhatsApp connection closed');
         this.teardownSocket(sock);
         if (statusCode === DisconnectReason.loggedOut) return;
+        if (statusCode === DisconnectReason.restartRequired) {
+          logger.info('WhatsApp restart required, reconnecting immediately');
+          void this.start();
+          return;
+        }
         this.scheduleReconnect();
         return;
       }

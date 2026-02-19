@@ -279,6 +279,12 @@ function hashSession(adminToken: string, sessionSecret: string): string {
   return createHash('sha256').update(adminToken).update(':').update(sessionSecret).digest('hex');
 }
 
+function normalizePathname(pathname: string): string {
+  if (!pathname) return '/';
+  const normalized = pathname.replace(/\/+$/, '');
+  return normalized || '/';
+}
+
 function hasValidSession(req: http.IncomingMessage, expected: string): boolean {
   const cookies = parseCookies(req.headers.cookie);
   const got = cookies[AUTH_COOKIE_NAME];
@@ -323,8 +329,9 @@ export function startAdminWebServer(
   const server = http.createServer(async (req, res) => {
     try {
       const url = new URL(req.url ?? '/', `http://${config.adminWeb.host}:${config.adminWeb.port}`);
+      const pathname = normalizePathname(url.pathname);
 
-      if (req.method === 'GET' && url.pathname === '/login') {
+      if (req.method === 'GET' && pathname === '/login') {
         if (hasValidSession(req, expectedSession)) {
           res.writeHead(303, { Location: '/settings' });
           res.end();
@@ -336,7 +343,7 @@ export function startAdminWebServer(
         return;
       }
 
-      if (req.method === 'POST' && url.pathname === '/login') {
+      if (req.method === 'POST' && pathname === '/login') {
         const body = await readBody(req);
         const params = new URLSearchParams(body);
         const password = params.get('password') ?? '';
@@ -356,7 +363,7 @@ export function startAdminWebServer(
         return;
       }
 
-      if (req.method === 'POST' && url.pathname === '/logout') {
+      if (req.method === 'POST' && pathname === '/logout') {
         const secure = isSecureRequest(req);
         res.writeHead(303, {
           Location: '/login',
@@ -367,7 +374,7 @@ export function startAdminWebServer(
         return;
       }
 
-      if (req.method === 'POST' && url.pathname === '/wa/refresh') {
+      if (req.method === 'POST' && pathname === '/wa/refresh') {
         if (!hasValidSession(req, expectedSession)) {
           res.writeHead(303, { Location: '/login', 'Cache-Control': 'no-store' });
           res.end();
@@ -389,7 +396,7 @@ export function startAdminWebServer(
         return;
       }
 
-      if (req.method === 'GET' && (url.pathname === '/' || url.pathname === '/settings')) {
+      if (req.method === 'GET' && (pathname === '/' || pathname === '/settings')) {
         const waView = await getWaView(waStatusProvider);
         const html = renderHtml(settingsService.get(), waView);
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
@@ -397,7 +404,7 @@ export function startAdminWebServer(
         return;
       }
 
-      if (req.method === 'POST' && url.pathname === '/settings') {
+      if (req.method === 'POST' && pathname === '/settings') {
         const body = await readBody(req);
         const params = new URLSearchParams(body);
         const patch = {
