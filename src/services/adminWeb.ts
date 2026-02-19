@@ -16,6 +16,7 @@ type WhatsAppConnectionSnapshot = {
 
 type WhatsAppStatusProvider = {
   getConnectionSnapshot(): WhatsAppConnectionSnapshot;
+  refreshConnection?(): Promise<{ ok: boolean; message: string }>;
 };
 
 const AUTH_COOKIE_NAME = 'mlbot_admin_session';
@@ -70,10 +71,11 @@ function renderHtml(
       .flash { margin: 0 0 12px; border:1px solid #a7f3d0; background:var(--okbg); color:var(--ok); border-radius:8px; padding:10px; font-size:14px; }
       .muted { color:var(--muted); font-size:13px; }
       code { background:#f3f4f6; padding:2px 6px; border-radius:6px; }
-	      .wa-panel { border:1px solid var(--line); border-radius:10px; padding:12px; margin: 0 0 14px; background:#fafafa; }
-	      .wa-state { margin: 0 0 10px; font-size:14px; }
-	      .wa-qr { display:flex; gap:12px; align-items:flex-start; flex-wrap:wrap; }
-	      .wa-qr img { width: 220px; height: 220px; border:1px solid var(--line); border-radius:10px; background:#fff; }
+      .wa-panel { border:1px solid var(--line); border-radius:10px; padding:12px; margin: 0 0 14px; background:#fafafa; }
+      .wa-state { margin: 0 0 10px; font-size:14px; }
+      .wa-qr { display:flex; gap:12px; align-items:flex-start; flex-wrap:wrap; }
+      .wa-qr img { width: 220px; height: 220px; border:1px solid var(--line); border-radius:10px; background:#fff; }
+      .wa-actions { margin-top: 10px; display:flex; gap:8px; }
         .toolbar { display:flex; justify-content:flex-end; margin-bottom: 12px; }
         .btn-light { background:#fff; color:#111827; border:1px solid var(--line); }
 	    </style>
@@ -107,6 +109,11 @@ function renderHtml(
                   </div>`
                 : '<p class="muted">QR indisponível no momento. Se desconectado, recarregue a página ou reinicie o container.</p>'
             }
+            <div class="wa-actions">
+              <form method="post" action="/wa/refresh">
+                <button class="btn btn-light" type="submit">Atualizar QR</button>
+              </form>
+            </div>
           </div>
 	        <form method="post" action="/settings">
           <label class="row">
@@ -357,6 +364,22 @@ export function startAdminWebServer(
           'Cache-Control': 'no-store',
         });
         res.end();
+        return;
+      }
+
+      if (req.method === 'POST' && url.pathname === '/wa/refresh') {
+        if (!hasValidSession(req, expectedSession)) {
+          res.writeHead(303, { Location: '/login', 'Cache-Control': 'no-store' });
+          res.end();
+          return;
+        }
+        const result = waStatusProvider?.refreshConnection
+          ? await waStatusProvider.refreshConnection()
+          : { ok: false, message: 'Refresh de conexão indisponível neste runtime.' };
+        const waView = await getWaView(waStatusProvider);
+        const html = renderHtml(settingsService.get(), waView, result.message);
+        res.writeHead(result.ok ? 200 : 503, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+        res.end(html);
         return;
       }
 

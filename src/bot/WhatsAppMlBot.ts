@@ -158,6 +158,27 @@ export class WhatsAppMlBot {
     }
   }
 
+  async refreshConnection(): Promise<{ ok: boolean; message: string }> {
+    this.latestQr = null;
+    this.connectionState = 'connecting';
+    this.resetReconnectBackoff();
+
+    const current = this.sock;
+    if (current) {
+      this.teardownSocket(current);
+      try {
+        (current as any)?.ws?.close?.();
+      } catch (err) {
+        logger.warn({ err }, 'failed to close current WhatsApp socket during manual refresh');
+      }
+    }
+
+    void this.start().catch((err) => {
+      logger.warn({ err }, 'failed to restart WhatsApp socket after manual refresh');
+    });
+    return { ok: true, message: 'Reconexão do WhatsApp iniciada. Aguarde alguns segundos e recarregue.' };
+  }
+
   private async startImpl(): Promise<void> {
     await ensureDir(config.dataDirAbs);
     await ensureDir(path.join(config.dataDirAbs, 'media'));
@@ -188,15 +209,7 @@ export class WhatsAppMlBot {
         const statusCode = (lastDisconnect?.error as any)?.output?.statusCode;
         const reason = statusCode ? DisconnectReason[statusCode] : 'unknown';
         logger.warn({ statusCode, reason }, 'WhatsApp connection closed');
-        try {
-          // Prevent listener accumulation if we restart.
-          sock.ev.removeAllListeners('creds.update');
-          sock.ev.removeAllListeners('connection.update');
-          sock.ev.removeAllListeners('messages.upsert');
-        } catch {
-          // ignore
-        }
-        this.sock = null;
+        this.teardownSocket(sock);
         if (statusCode === DisconnectReason.loggedOut) return;
         this.scheduleReconnect();
         return;
@@ -221,6 +234,18 @@ export class WhatsAppMlBot {
     this.sock = sock;
 
     logger.info('Bot started');
+  }
+
+  private teardownSocket(sock: ReturnType<typeof makeWASocket>): void {
+    try {
+      // Prevent listener accumulation if we restart.
+      sock.ev.removeAllListeners('creds.update');
+      sock.ev.removeAllListeners('connection.update');
+      sock.ev.removeAllListeners('messages.upsert');
+    } catch {
+      // ignore
+    }
+    if (this.sock === sock) this.sock = null;
   }
 
   getConnectionSnapshot(): {

@@ -56,6 +56,7 @@ npm run dev
 ```
 
 5. Escaneie o QR code para logar o WhatsApp do bot (disponível nos logs e no painel web em `/settings`).
+   Se o QR ficar desatualizado, use o botão **Atualizar QR** no painel para forçar reconexão.
 
 6. (Opcional) Abra o painel web local de configuração:
 
