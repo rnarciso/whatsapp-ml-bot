@@ -38,9 +38,9 @@ export interface MlCategoryAttribute {
 
 type MlRuntime = {
   siteId: string;
-  clientId?: string;
-  clientSecret?: string;
-  refreshToken?: string;
+  clientId: string | undefined;
+  clientSecret: string | undefined;
+  refreshToken: string | undefined;
   currencyId: string;
   listingTypeId: string;
   buyingMode: string;

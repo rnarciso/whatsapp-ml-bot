@@ -158,7 +158,7 @@ export class OpenAIVisionService {
   constructor(private settings: SettingsService) {}
 
   private runtime(): {
-    baseUrl?: string;
+    baseUrl: string | undefined;
     apiKey: string;
     model: string;
     fallback: string;
@@ -173,7 +173,7 @@ export class OpenAIVisionService {
     };
   }
 
-  private buildClient(runtime: { baseUrl?: string; apiKey: string }): OpenAI {
+  private buildClient(runtime: { baseUrl: string | undefined; apiKey: string }): OpenAI {
     return new OpenAI({ apiKey: runtime.apiKey, baseURL: runtime.baseUrl });
   }
 
