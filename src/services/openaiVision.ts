@@ -154,12 +154,31 @@ function isInvalidModelError(err: unknown): boolean {
   return /invalid model name/i.test(msg) || /model=.*call [`'"]?\/v1\/models/i.test(msg);
 }
 
+function tryParseJsonString(value: unknown): unknown | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) return null;
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    return null;
+  }
+}
+
 function collectObjectCandidates(root: unknown, maxDepth = 3): Array<Record<string, unknown>> {
   const out: Array<Record<string, unknown>> = [];
   const seen = new Set<unknown>();
 
   const walk = (value: unknown, depth: number): void => {
-    if (depth > maxDepth || !value || typeof value !== 'object' || seen.has(value)) return;
+    if (depth > maxDepth || value == null || seen.has(value)) return;
+
+    const fromString = tryParseJsonString(value);
+    if (fromString) {
+      walk(fromString, depth + 1);
+      return;
+    }
+
+    if (typeof value !== 'object') return;
     seen.add(value);
 
     if (Array.isArray(value)) {
@@ -202,7 +221,9 @@ function normalizeVisionLike(candidate: Record<string, unknown>): Record<string,
 }
 
 function parseVisionResultFlexible(raw: unknown): VisionResult {
-  const candidates = collectObjectCandidates(raw);
+  const rootFromString = tryParseJsonString(raw);
+  const root = rootFromString ?? raw;
+  const candidates = collectObjectCandidates(root);
   let lastIssues: unknown = null;
 
   for (const c of candidates) {
@@ -212,7 +233,14 @@ function parseVisionResultFlexible(raw: unknown): VisionResult {
     lastIssues = parsed.error.issues;
   }
 
-  throw new Error(`Resposta fora do schema esperado (${JSON.stringify(lastIssues)})`);
+  logger.warn(
+    {
+      issues: lastIssues,
+      rootType: Array.isArray(root) ? 'array' : typeof root,
+    },
+    'Vision response did not match expected schema',
+  );
+  throw new Error('A IA retornou dados incompletos para montar o anúncio');
 }
 
 export class OpenAIVisionService {

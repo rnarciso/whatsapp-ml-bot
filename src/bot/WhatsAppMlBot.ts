@@ -142,6 +142,22 @@ function formatClock(ts: number): string {
   return new Date(ts).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
 }
 
+function formatAnalysisErrorForUser(err: unknown): string {
+  const msg =
+    typeof (err as any)?.message === 'string'
+      ? (err as any).message
+      : typeof err === 'string'
+        ? err
+        : 'erro inesperado';
+  if (/dados incompletos para montar o anúncio/i.test(msg)) {
+    return 'A IA retornou dados incompletos para este item';
+  }
+  if (/modelo inválido no provedor openai-compatible/i.test(msg) || /invalid model name/i.test(msg)) {
+    return 'o modelo configurado no provedor OpenAI-compatible é inválido';
+  }
+  return msg;
+}
+
 export class WhatsAppMlBot {
   private sock: ReturnType<typeof makeWASocket> | null = null;
   private connectionState: 'connecting' | 'open' | 'closed' = 'closed';
@@ -636,7 +652,7 @@ export class WhatsAppMlBot {
       this.scheduleAnalysis(active.id, Math.max(1_000, (active.collectUntil ?? nowMs()) - nowMs()));
       if (isNew) {
         const collectUntil = active.collectUntil ?? nowMs() + appSettings.photo_collect_window_sec * 1000;
-        const analyzeEta = Math.max(20, Math.min(90, 15 + active.photos.length * 12));
+        const analyzeEta = Math.max(12, Math.min(75, 10 + active.photos.length * 8));
         await this.reply(
           groupId,
           [
@@ -704,7 +720,7 @@ export class WhatsAppMlBot {
     try {
       const s1 = (await this.store.read()).sessions[sessionId]!;
       const imagePaths = s1.photos.map((p) => p.filePath);
-      const etaSec = Math.max(20, Math.min(90, 15 + imagePaths.length * 12));
+      const etaSec = Math.max(12, Math.min(75, 10 + imagePaths.length * 8));
       const tasksAhead = Math.max(0, this.queue.size + this.queue.pending - 1);
       const queueHint = tasksAhead > 0 ? ` Fila atual: ${tasksAhead} tarefa(s) na frente.` : '';
       await this.sendToGroup(
@@ -767,9 +783,13 @@ export class WhatsAppMlBot {
 	        s.updatedAt = nowMs();
 	      });
         if (groupId) {
+          const friendly = formatAnalysisErrorForUser(err);
           await this.sendToGroup(
             groupId,
-            `Falha na análise da sessão ${shortSessionId(sessionId)}: ${err?.message ?? String(err)}\nVocê pode enviar nova foto ou responder "reanalisar".`,
+            [
+              `Falha na análise da sessão ${shortSessionId(sessionId)}: ${friendly}.`,
+              'Tente enviar a foto novamente ou responda "reanalisar".',
+            ].join('\n'),
           );
         }
 	    }
@@ -1084,7 +1104,7 @@ export class WhatsAppMlBot {
 	    let created: { id: string; permalink?: string; status?: string } | null = null;
 	    let pauseOk = false;
 	    try {
-        const publishEta = Math.max(25, Math.min(120, 20 + s.photos.length * 10));
+        const publishEta = Math.max(18, Math.min(90, 14 + s.photos.length * 8));
         const tasksAhead = Math.max(0, this.queue.size + this.queue.pending);
         const queueHint = tasksAhead > 0 ? ` Fila atual: ${tasksAhead} tarefa(s) em processamento.` : '';
         await this.reply(
