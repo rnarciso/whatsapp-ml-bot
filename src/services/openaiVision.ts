@@ -154,6 +154,67 @@ function isInvalidModelError(err: unknown): boolean {
   return /invalid model name/i.test(msg) || /model=.*call [`'"]?\/v1\/models/i.test(msg);
 }
 
+function collectObjectCandidates(root: unknown, maxDepth = 3): Array<Record<string, unknown>> {
+  const out: Array<Record<string, unknown>> = [];
+  const seen = new Set<unknown>();
+
+  const walk = (value: unknown, depth: number): void => {
+    if (depth > maxDepth || !value || typeof value !== 'object' || seen.has(value)) return;
+    seen.add(value);
+
+    if (Array.isArray(value)) {
+      for (const v of value) walk(v, depth + 1);
+      return;
+    }
+
+    const obj = value as Record<string, unknown>;
+    out.push(obj);
+
+    const preferred = ['data', 'result', 'output', 'response', 'json', 'payload', 'analysis', 'vision'];
+    for (const key of preferred) {
+      if (key in obj) walk(obj[key], depth + 1);
+    }
+    for (const v of Object.values(obj)) walk(v, depth + 1);
+  };
+
+  walk(root, 0);
+  return out;
+}
+
+function normalizeVisionLike(candidate: Record<string, unknown>): Record<string, unknown> {
+  const c = { ...candidate };
+
+  if (typeof c.confidence === 'string') {
+    const raw = c.confidence.trim().replace('%', '');
+    const n = Number(raw);
+    if (Number.isFinite(n)) c.confidence = n > 1 ? n / 100 : n;
+  }
+
+  if (!Array.isArray(c.questions)) {
+    const maybeQuestions = c.questions ?? c.perguntas ?? c.questions_list;
+    if (Array.isArray(maybeQuestions)) c.questions = maybeQuestions;
+  }
+
+  if (!c.product && c.produto && typeof c.produto === 'object') c.product = c.produto;
+  if (!c.listing && c.anuncio && typeof c.anuncio === 'object') c.listing = c.anuncio;
+
+  return c;
+}
+
+function parseVisionResultFlexible(raw: unknown): VisionResult {
+  const candidates = collectObjectCandidates(raw);
+  let lastIssues: unknown = null;
+
+  for (const c of candidates) {
+    const normalized = normalizeVisionLike(c);
+    const parsed = visionResultZ.safeParse(normalized);
+    if (parsed.success) return parsed.data as VisionResult;
+    lastIssues = parsed.error.issues;
+  }
+
+  throw new Error(`Resposta fora do schema esperado (${JSON.stringify(lastIssues)})`);
+}
+
 export class OpenAIVisionService {
   constructor(private settings: SettingsService) {}
 
@@ -225,8 +286,7 @@ export class OpenAIVisionService {
         });
 
         const parsed = rsp.output_parsed;
-        const validated = visionResultZ.parse(parsed);
-        return validated as VisionResult;
+        return parseVisionResultFlexible(parsed);
       } catch (err) {
         if (isInvalidModelError(err)) throw err;
         logger.warn({ err }, 'OpenAI Responses structured output failed; trying fallbacks');
@@ -242,8 +302,7 @@ export class OpenAIVisionService {
 
         const outputText: string = (rsp as any).output_text ?? '';
         const obj = extractFirstJsonObject(outputText);
-        const validated = visionResultZ.parse(obj);
-        return validated as VisionResult;
+        return parseVisionResultFlexible(obj);
       } catch (err) {
         if (isInvalidModelError(err)) throw err;
         logger.warn({ err }, 'OpenAI Responses json_object failed; trying chat.completions');
@@ -272,8 +331,7 @@ export class OpenAIVisionService {
         });
         const content = String(rsp?.choices?.[0]?.message?.content ?? '').trim();
         const obj = extractFirstJsonObject(content);
-        const validated = visionResultZ.parse(obj);
-        return validated as VisionResult;
+        return parseVisionResultFlexible(obj);
       } catch (err) {
         if (isInvalidModelError(err)) throw err;
         logger.warn({ err }, 'chat.completions with response_format failed; retrying without response_format');
@@ -285,8 +343,7 @@ export class OpenAIVisionService {
       });
       const content2 = String(rsp2?.choices?.[0]?.message?.content ?? '').trim();
       const obj2 = extractFirstJsonObject(content2);
-      const validated2 = visionResultZ.parse(obj2);
-      return validated2 as VisionResult;
+      return parseVisionResultFlexible(obj2);
     };
 
     const primaryModel = rt.model;
