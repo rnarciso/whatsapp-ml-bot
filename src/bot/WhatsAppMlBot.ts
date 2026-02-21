@@ -65,6 +65,16 @@ function getText(msg: WAMessage): string | null {
   return null;
 }
 
+function parseBotCommand(text: string): string | null {
+  const cleaned = text.replace(/[\u200B-\u200D\uFEFF]/g, '').trim();
+  if (!cleaned) return null;
+
+  const m = cleaned.match(/^(?:!|\/)?ml-bot\b\s*(.*)$/i);
+  if (!m) return null;
+
+  return (m[1] ?? '').trim().replace(/[.!?]+$/, '').trim();
+}
+
 function isImageMessage(msg: WAMessage): boolean {
   const m = msg.message as any;
   return Boolean(m?.imageMessage);
@@ -330,8 +340,9 @@ export class WhatsAppMlBot {
     if (!sender) return;
 
     const text = getText(msg)?.trim() ?? '';
-    if (text.startsWith('!ml-bot')) {
-      await this.handleCommand(jid, sender, text, msg);
+    const botCmd = parseBotCommand(text);
+    if (botCmd !== null) {
+      await this.handleCommand(jid, sender, botCmd, msg);
       return;
     }
 
@@ -425,8 +436,8 @@ export class WhatsAppMlBot {
     }
   }
 
-  private async handleCommand(groupId: string, userId: string, text: string, msg: WAMessage): Promise<void> {
-    const cmd = text.replace(/^!ml-bot\\s*/i, '').trim().toLowerCase();
+  private async handleCommand(groupId: string, userId: string, cmdText: string, msg: WAMessage): Promise<void> {
+    const cmd = cmdText.trim().toLowerCase();
     if (cmd === 'ping') {
       await this.reply(groupId, 'pong', msg);
       return;
@@ -439,7 +450,7 @@ export class WhatsAppMlBot {
       await this.startNewSession(groupId, userId, msg);
       return;
     }
-    if (cmd === 'cancel') {
+    if (cmd === 'cancel' || cmd === 'cancelar') {
       await this.cancelActiveSession(groupId, userId, msg);
       return;
     }
