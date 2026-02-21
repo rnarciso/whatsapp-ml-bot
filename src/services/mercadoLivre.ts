@@ -36,6 +36,18 @@ export interface MlCategoryAttribute {
   values?: Array<{ id?: string; name?: string }>;
 }
 
+type MlRuntime = {
+  siteId: string;
+  clientId?: string;
+  clientSecret?: string;
+  refreshToken?: string;
+  currencyId: string;
+  listingTypeId: string;
+  buyingMode: string;
+  defaultQuantity: number;
+  dryRun: boolean;
+};
+
 type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
 
 function asBool(v: unknown): v is boolean {
@@ -59,7 +71,26 @@ export class MercadoLivreClient {
   private tokens: MlTokens | null = null;
   private refreshInFlight: Promise<string> | null = null;
 
-  constructor(private getTokens: () => Promise<MlTokens | null>, private saveTokens: (t: MlTokens) => Promise<void>) {}
+  constructor(
+    private getTokens: () => Promise<MlTokens | null>,
+    private saveTokens: (t: MlTokens) => Promise<void>,
+    private getRuntime?: () => MlRuntime,
+  ) {}
+
+  private runtime(): MlRuntime {
+    if (this.getRuntime) return this.getRuntime();
+    return {
+      siteId: config.ml.siteId,
+      clientId: config.ml.clientId ?? undefined,
+      clientSecret: config.ml.clientSecret ?? undefined,
+      refreshToken: config.ml.refreshToken ?? undefined,
+      currencyId: config.ml.currencyId,
+      listingTypeId: config.ml.listingTypeId,
+      buyingMode: config.ml.buyingMode,
+      defaultQuantity: config.ml.defaultQuantity,
+      dryRun: config.ml.dryRun,
+    };
+  }
 
   private async apiFetch<T = unknown>(
     method: string,
@@ -115,9 +146,10 @@ export class MercadoLivreClient {
   }
 
   private async canUseOAuth(): Promise<boolean> {
-    if (!config.ml.clientId || !config.ml.clientSecret) return false;
+    const rt = this.runtime();
+    if (!rt.clientId || !rt.clientSecret) return false;
     if (!this.tokens) this.tokens = await this.getTokens();
-    return Boolean(this.tokens?.refresh_token || config.ml.refreshToken);
+    return Boolean(this.tokens?.refresh_token || rt.refreshToken);
   }
 
   private isPolicyAgentForbidden(err: any): boolean {
@@ -141,7 +173,8 @@ export class MercadoLivreClient {
     // Refresh tokens can be rotated/one-time-use. Ensure only one refresh happens at a time.
     if (this.refreshInFlight) return this.refreshInFlight;
 
-    if (!config.ml.clientId || !config.ml.clientSecret || !(this.tokens?.refresh_token || config.ml.refreshToken)) {
+    const rt = this.runtime();
+    if (!rt.clientId || !rt.clientSecret || !(this.tokens?.refresh_token || rt.refreshToken)) {
       throw new Error('Missing Mercado Livre credentials. Set ML_CLIENT_ID, ML_CLIENT_SECRET and ML_REFRESH_TOKEN.');
     }
 
@@ -153,12 +186,12 @@ export class MercadoLivreClient {
         return this.tokens.access_token;
       }
 
-      const refreshToken = this.tokens?.refresh_token ?? config.ml.refreshToken!;
+      const refreshToken = this.tokens?.refresh_token ?? rt.refreshToken!;
 
       const form = new URLSearchParams();
       form.set('grant_type', 'refresh_token');
-      form.set('client_id', config.ml.clientId!);
-      form.set('client_secret', config.ml.clientSecret!);
+      form.set('client_id', rt.clientId!);
+      form.set('client_secret', rt.clientSecret!);
       form.set('refresh_token', refreshToken);
 
       const res = await fetch(urlJoin(this.baseUrl, '/oauth/token'), {
@@ -200,7 +233,7 @@ export class MercadoLivreClient {
   }
 
   async predictCategory(title: string): Promise<MlCategoryPrediction | null> {
-    const site = config.ml.siteId;
+    const site = this.runtime().siteId;
     let data: any;
     try {
       data = await this.apiFetch<any>('GET', `/sites/${site}/category_predictor/predict`, { query: { title } });
@@ -214,7 +247,8 @@ export class MercadoLivreClient {
   }
 
   async searchSimilar(query: string, categoryId?: string): Promise<MlSearchResult> {
-    const site = config.ml.siteId;
+    const rt = this.runtime();
+    const site = rt.siteId;
     let data: any;
     try {
       data = await this.apiFetch<any>('GET', `/sites/${site}/search`, { query: { q: query, category: categoryId, limit: 50 } });
@@ -229,7 +263,7 @@ export class MercadoLivreClient {
         id: String(r.id ?? ''),
         title: String(r.title ?? ''),
         price: Number(r.price ?? NaN),
-        currency_id: String(r.currency_id ?? config.ml.currencyId),
+        currency_id: String(r.currency_id ?? rt.currencyId),
         permalink: asString(r.permalink) ? r.permalink : undefined,
         condition: asString(r.condition) ? r.condition : undefined,
         sold_quantity: typeof r.sold_quantity === 'number' ? r.sold_quantity : undefined,
@@ -256,7 +290,7 @@ export class MercadoLivreClient {
   }
 
   async createItem(payload: Record<string, unknown>): Promise<MlCreateItemResult> {
-    if (config.ml.dryRun) {
+    if (this.runtime().dryRun) {
       logger.info({ payload }, 'ML_DRY_RUN=true; skipping createItem');
       return { id: 'DRY_RUN_ITEM_ID', status: 'paused' };
     }
@@ -292,12 +326,12 @@ export class MercadoLivreClient {
   }
 
   async pauseItem(itemId: string): Promise<void> {
-    if (config.ml.dryRun) return;
+    if (this.runtime().dryRun) return;
     await this.apiFetch('PUT', `/items/${itemId}`, { auth: true, body: { status: 'paused' } });
   }
 
   async setDescription(itemId: string, plainText: string): Promise<void> {
-    if (config.ml.dryRun) return;
+    if (this.runtime().dryRun) return;
     await this.apiFetch('POST', `/items/${itemId}/description`, { auth: true, body: { plain_text: plainText } });
   }
 }

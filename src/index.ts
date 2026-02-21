@@ -61,14 +61,28 @@ async function main(): Promise<void> {
         delete db.mlTokensEncrypted;
       });
     },
+    () => {
+      const s = settings.get();
+      return {
+        siteId: s.ml_site_id,
+        clientId: s.ml_client_id || undefined,
+        clientSecret: s.ml_client_secret || undefined,
+        refreshToken: s.ml_refresh_token || undefined,
+        currencyId: s.ml_currency_id,
+        listingTypeId: s.ml_listing_type_id,
+        buyingMode: s.ml_buying_mode,
+        defaultQuantity: s.ml_default_quantity,
+        dryRun: s.ml_dry_run,
+      };
+    },
   );
 
-  const vision = new OpenAIVisionService();
+  const vision = new OpenAIVisionService(settings);
   const bot = new WhatsAppMlBot(store, vision, ml, settings);
   await bot.start();
 
   startCleanupLoop(store, settings);
-  startAdminWebServer(settings, bot);
+  startAdminWebServer(settings, bot, vision);
 }
 
 main().catch((err) => {

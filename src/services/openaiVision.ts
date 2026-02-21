@@ -4,10 +4,10 @@ import OpenAI from 'openai';
 import type { ResponseInputItem } from 'openai/resources/responses/responses';
 import { z } from 'zod';
 
-import { config } from '../config.js';
 import { logger } from '../logger.js';
 import type { VisionResult } from '../types.js';
 import { extractFirstJsonObject } from '../utils/json.js';
+import type { SettingsService } from './settings.js';
 
 const visionResultZ = z.object({
   confidence: z.number().min(0).max(1),
@@ -155,13 +155,40 @@ function isInvalidModelError(err: unknown): boolean {
 }
 
 export class OpenAIVisionService {
-  private client: OpenAI;
+  constructor(private settings: SettingsService) {}
 
-  constructor() {
-    this.client = new OpenAI({ apiKey: config.openai.apiKey, baseURL: config.openai.baseUrl });
+  private runtime(): {
+    baseUrl?: string;
+    apiKey: string;
+    model: string;
+    fallback: string;
+  } {
+    const s = this.settings.get();
+    const base = s.openai_base_url?.trim();
+    return {
+      baseUrl: base ? (base.endsWith('/v1') ? base : `${base.replace(/\/+$/, '')}/v1`) : undefined,
+      apiKey: s.openai_api_key?.trim() || 'local',
+      model: s.openai_model_vision.trim(),
+      fallback: s.openai_model_vision_fallback.trim(),
+    };
+  }
+
+  private buildClient(runtime: { baseUrl?: string; apiKey: string }): OpenAI {
+    return new OpenAI({ apiKey: runtime.apiKey, baseURL: runtime.baseUrl });
+  }
+
+  async listAvailableModels(): Promise<string[]> {
+    const rt = this.runtime();
+    const client = this.buildClient(rt);
+    const models = await client.models.list();
+    const ids = models.data.map((m) => m.id).filter(Boolean);
+    ids.sort((a, b) => a.localeCompare(b));
+    return ids;
   }
 
   async analyzeProduct(imagePaths: string[]): Promise<VisionResult> {
+    const rt = this.runtime();
+    const client = this.buildClient(rt);
     const images = await Promise.all(
       imagePaths.slice(0, 8).map(async (p) => {
         const buf = await fs.readFile(p);
@@ -184,7 +211,7 @@ export class OpenAIVisionService {
     const runWithModel = async (model: string): Promise<VisionResult> => {
       // 1) Try Responses API Structured Outputs (json_schema).
       try {
-        const rsp = await this.client.responses.parse({
+        const rsp = await client.responses.parse({
           model,
           input,
           text: {
@@ -207,7 +234,7 @@ export class OpenAIVisionService {
 
       // 2) Try Responses API json_object + zod validation.
       try {
-        const rsp = await this.client.responses.create({
+        const rsp = await client.responses.create({
           model,
           input,
           text: { format: { type: 'json_object' } },
@@ -238,7 +265,7 @@ export class OpenAIVisionService {
 
       // First attempt with response_format (if supported).
       try {
-        const rsp = await (this.client as any).chat.completions.create({
+        const rsp = await (client as any).chat.completions.create({
           model,
           messages: chatMessages,
           response_format: { type: 'json_object' },
@@ -252,7 +279,7 @@ export class OpenAIVisionService {
         logger.warn({ err }, 'chat.completions with response_format failed; retrying without response_format');
       }
 
-      const rsp2 = await (this.client as any).chat.completions.create({
+      const rsp2 = await (client as any).chat.completions.create({
         model,
         messages: chatMessages,
       });
@@ -262,12 +289,12 @@ export class OpenAIVisionService {
       return validated2 as VisionResult;
     };
 
-    const primaryModel = config.openai.modelVision;
+    const primaryModel = rt.model;
     try {
       return await runWithModel(primaryModel);
     } catch (err) {
       if (!isInvalidModelError(err)) throw err;
-      const fallback = config.openai.modelVisionFallback?.trim();
+      const fallback = rt.fallback;
       if (fallback && fallback !== primaryModel) {
         logger.warn(
           { primaryModel, fallback },

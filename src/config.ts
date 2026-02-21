@@ -89,13 +89,6 @@ function normalizeBaseUrl(raw: string | undefined): string | undefined {
 
 const openaiBaseUrl = normalizeBaseUrl(env.OPENAI_BASE_URL);
 const openaiApiKeyRaw = env.OPENAI_API_KEY?.trim();
-const isLikelyOpenAI =
-  !openaiBaseUrl || openaiBaseUrl.includes('api.openai.com') || openaiBaseUrl.includes('openai.azure.com');
-if (isLikelyOpenAI && !openaiApiKeyRaw) {
-  // eslint-disable-next-line no-console
-  console.error({ OPENAI_API_KEY: ['OPENAI_API_KEY is required (or set OPENAI_BASE_URL to a local OpenAI-compatible endpoint)'] });
-  process.exit(1);
-}
 // Some OpenAI-compatible gateways don't require auth, but the OpenAI SDK still wants a non-empty key.
 const openaiApiKey = openaiApiKeyRaw || 'local';
 

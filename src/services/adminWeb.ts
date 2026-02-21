@@ -19,6 +19,10 @@ type WhatsAppStatusProvider = {
   refreshConnection?(): Promise<{ ok: boolean; message: string }>;
 };
 
+type VisionAdminProvider = {
+  listAvailableModels(): Promise<string[]>;
+};
+
 const AUTH_COOKIE_NAME = 'mlbot_admin_session';
 const AUTH_COOKIE_MAX_AGE_SEC = 12 * 60 * 60;
 
@@ -44,10 +48,13 @@ function esc(s: string): string {
 
 function renderHtml(
   settings: AppSettings,
+  modelOptions: string[],
   wa: { stateLabel: string; qrDataUrl: string | null; qrUpdatedAtLabel: string | null },
   flash?: string,
 ): string {
   const checked = settings.require_command_for_images ? 'checked' : '';
+  const mlDryRunChecked = settings.ml_dry_run ? 'checked' : '';
+  const modelDatalist = modelOptions.map((m) => `<option value="${esc(m)}"></option>`).join('');
   return `<!doctype html>
 <html lang="pt-BR">
   <head>
@@ -115,7 +122,70 @@ function renderHtml(
               </form>
             </div>
           </div>
-	        <form method="post" action="/settings">
+        <form method="post" action="/settings">
+          <h3>OpenAI / LiteLLM</h3>
+          <label>
+            OPENAI_BASE_URL
+            <input type="text" name="openai_base_url" value="${esc(settings.openai_base_url)}" />
+          </label>
+
+          <label>
+            OPENAI_API_KEY
+            <input type="text" name="openai_api_key" value="${esc(settings.openai_api_key)}" />
+          </label>
+
+          <label>
+            OPENAI_MODEL_VISION
+            <input type="text" list="model-options" name="openai_model_vision" value="${esc(settings.openai_model_vision)}" />
+          </label>
+
+          <label>
+            OPENAI_MODEL_VISION_FALLBACK (opcional)
+            <input type="text" list="model-options" name="openai_model_vision_fallback" value="${esc(settings.openai_model_vision_fallback)}" />
+          </label>
+          <datalist id="model-options">${modelDatalist}</datalist>
+
+          <p class="muted">Modelos da API: ${modelOptions.length} carregados. <a href="/models/refresh">Atualizar agora</a></p>
+
+          <h3>Mercado Livre</h3>
+          <label>
+            ML_SITE_ID
+            <input type="text" name="ml_site_id" value="${esc(settings.ml_site_id)}" />
+          </label>
+          <label>
+            ML_CLIENT_ID
+            <input type="text" name="ml_client_id" value="${esc(settings.ml_client_id)}" />
+          </label>
+          <label>
+            ML_CLIENT_SECRET
+            <input type="text" name="ml_client_secret" value="${esc(settings.ml_client_secret)}" />
+          </label>
+          <label>
+            ML_REFRESH_TOKEN
+            <input type="text" name="ml_refresh_token" value="${esc(settings.ml_refresh_token)}" />
+          </label>
+          <label>
+            ML_CURRENCY_ID
+            <input type="text" name="ml_currency_id" value="${esc(settings.ml_currency_id)}" />
+          </label>
+          <label>
+            ML_LISTING_TYPE_ID
+            <input type="text" name="ml_listing_type_id" value="${esc(settings.ml_listing_type_id)}" />
+          </label>
+          <label>
+            ML_BUYING_MODE
+            <input type="text" name="ml_buying_mode" value="${esc(settings.ml_buying_mode)}" />
+          </label>
+          <label>
+            ML_DEFAULT_QUANTITY
+            <input type="number" min="1" max="9999" name="ml_default_quantity" value="${settings.ml_default_quantity}" />
+          </label>
+          <label class="row">
+            <input type="checkbox" name="ml_dry_run" value="1" ${mlDryRunChecked} />
+            ML_DRY_RUN (somente simular)
+          </label>
+
+          <h3>Fluxo do Bot</h3>
           <label class="row">
             <input type="checkbox" name="require_command_for_images" value="1" ${checked} />
             Exigir <code>!ml-bot novo</code> antes de aceitar fotos
@@ -135,7 +205,24 @@ function renderHtml(
             Máximo de fotos por sessão
             <input type="number" min="1" max="20" name="max_photos_per_session" value="${settings.max_photos_per_session}" />
           </label>
+          <label>
+            WA_HUMAN_DELAY_MS_MIN
+            <input type="number" min="0" max="30000" name="wa_human_delay_ms_min" value="${settings.wa_human_delay_ms_min}" />
+          </label>
+          <label>
+            WA_HUMAN_DELAY_MS_MAX
+            <input type="number" min="0" max="30000" name="wa_human_delay_ms_max" value="${settings.wa_human_delay_ms_max}" />
+          </label>
+          <label>
+            WA_SEND_INTERVAL_MS
+            <input type="number" min="250" max="60000" name="wa_send_interval_ms" value="${settings.wa_send_interval_ms}" />
+          </label>
+          <label>
+            WA_SEND_INTERVAL_CAP
+            <input type="number" min="1" max="60" name="wa_send_interval_cap" value="${settings.wa_send_interval_cap}" />
+          </label>
 
+          <h3>Retenção e Limpeza</h3>
           <label>
             Retenção de fotos locais (horas)
             <input type="number" min="1" max="${24 * 90}" name="media_retention_hours" value="${settings.media_retention_hours}" />
@@ -149,6 +236,10 @@ function renderHtml(
           <label>
             Remover sessões antigas (dias)
             <input type="number" min="1" max="3650" name="session_retention_days" value="${settings.session_retention_days}" />
+          </label>
+          <label>
+            CLEANUP_INTERVAL_MIN
+            <input type="number" min="5" max="${24 * 60}" name="cleanup_interval_min" value="${settings.cleanup_interval_min}" />
           </label>
 
           <button class="btn" type="submit">Salvar</button>
@@ -218,6 +309,12 @@ function parseIntOrThrow(v: string | null, key: string): number {
   const n = Number(v ?? '');
   if (!Number.isFinite(n) || !Number.isInteger(n)) throw new Error(`Valor inválido para ${key}`);
   return n;
+}
+
+function parseBool(v: string | null): boolean {
+  if (!v) return false;
+  const s = v.trim().toLowerCase();
+  return s === '1' || s === 'true' || s === 'on' || s === 'yes' || s === 'sim';
 }
 
 function safeEqual(a: string, b: string): boolean {
@@ -316,6 +413,7 @@ async function getWaView(waStatusProvider?: WhatsAppStatusProvider): Promise<{
 export function startAdminWebServer(
   settingsService: SettingsService,
   waStatusProvider?: WhatsAppStatusProvider,
+  visionAdminProvider?: VisionAdminProvider,
 ): http.Server | null {
   if (!config.adminWeb.enabled) return null;
   const adminToken = config.adminWeb.token?.trim();
@@ -325,6 +423,18 @@ export function startAdminWebServer(
   }
   const sessionSecret = randomBytes(32).toString('hex');
   const expectedSession = hashSession(adminToken, sessionSecret);
+  let modelOptions: string[] = [];
+
+  const refreshModels = async (): Promise<{ ok: boolean; message: string }> => {
+    if (!visionAdminProvider) return { ok: false, message: 'Provider de modelos indisponível.' };
+    try {
+      modelOptions = await visionAdminProvider.listAvailableModels();
+      return { ok: true, message: `Modelos atualizados: ${modelOptions.length}` };
+    } catch (err: any) {
+      logger.warn({ err }, 'failed to refresh model list');
+      return { ok: false, message: `Falha ao carregar modelos: ${err?.message ?? String(err)}` };
+    }
+  };
 
   const server = http.createServer(async (req, res) => {
     try {
@@ -384,7 +494,7 @@ export function startAdminWebServer(
           ? await waStatusProvider.refreshConnection()
           : { ok: false, message: 'Refresh de conexão indisponível neste runtime.' };
         const waView = await getWaView(waStatusProvider);
-        const html = renderHtml(settingsService.get(), waView, result.message);
+        const html = renderHtml(settingsService.get(), modelOptions, waView, result.message);
         res.writeHead(result.ok ? 200 : 503, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
         res.end(html);
         return;
@@ -396,9 +506,21 @@ export function startAdminWebServer(
         return;
       }
 
-      if (req.method === 'GET' && (pathname === '/' || pathname === '/settings')) {
+      if (req.method === 'GET' && pathname === '/models/refresh') {
+        const result = await refreshModels();
         const waView = await getWaView(waStatusProvider);
-        const html = renderHtml(settingsService.get(), waView);
+        const html = renderHtml(settingsService.get(), modelOptions, waView, result.message);
+        res.writeHead(result.ok ? 200 : 503, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+        res.end(html);
+        return;
+      }
+
+      if (req.method === 'GET' && (pathname === '/' || pathname === '/settings')) {
+        if (modelOptions.length === 0 && visionAdminProvider) {
+          await refreshModels();
+        }
+        const waView = await getWaView(waStatusProvider);
+        const html = renderHtml(settingsService.get(), modelOptions, waView);
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
         res.end(html);
         return;
@@ -408,17 +530,35 @@ export function startAdminWebServer(
         const body = await readBody(req);
         const params = new URLSearchParams(body);
         const patch = {
-          require_command_for_images: params.get('require_command_for_images') === '1',
+          openai_base_url: (params.get('openai_base_url') ?? '').trim(),
+          openai_api_key: (params.get('openai_api_key') ?? '').trim(),
+          openai_model_vision: (params.get('openai_model_vision') ?? '').trim(),
+          openai_model_vision_fallback: (params.get('openai_model_vision_fallback') ?? '').trim(),
+          ml_site_id: (params.get('ml_site_id') ?? '').trim(),
+          ml_client_id: (params.get('ml_client_id') ?? '').trim(),
+          ml_client_secret: (params.get('ml_client_secret') ?? '').trim(),
+          ml_refresh_token: (params.get('ml_refresh_token') ?? '').trim(),
+          ml_currency_id: (params.get('ml_currency_id') ?? '').trim(),
+          ml_listing_type_id: (params.get('ml_listing_type_id') ?? '').trim(),
+          ml_buying_mode: (params.get('ml_buying_mode') ?? '').trim(),
+          ml_default_quantity: parseIntOrThrow(params.get('ml_default_quantity'), 'ml_default_quantity'),
+          ml_dry_run: parseBool(params.get('ml_dry_run')),
+          require_command_for_images: parseBool(params.get('require_command_for_images')),
           photo_collect_window_sec: parseIntOrThrow(params.get('photo_collect_window_sec'), 'photo_collect_window_sec'),
           max_image_bytes: parseIntOrThrow(params.get('max_image_bytes'), 'max_image_bytes'),
           max_photos_per_session: parseIntOrThrow(params.get('max_photos_per_session'), 'max_photos_per_session'),
+          wa_human_delay_ms_min: parseIntOrThrow(params.get('wa_human_delay_ms_min'), 'wa_human_delay_ms_min'),
+          wa_human_delay_ms_max: parseIntOrThrow(params.get('wa_human_delay_ms_max'), 'wa_human_delay_ms_max'),
+          wa_send_interval_ms: parseIntOrThrow(params.get('wa_send_interval_ms'), 'wa_send_interval_ms'),
+          wa_send_interval_cap: parseIntOrThrow(params.get('wa_send_interval_cap'), 'wa_send_interval_cap'),
           media_retention_hours: parseIntOrThrow(params.get('media_retention_hours'), 'media_retention_hours'),
           session_inactive_hours: parseIntOrThrow(params.get('session_inactive_hours'), 'session_inactive_hours'),
           session_retention_days: parseIntOrThrow(params.get('session_retention_days'), 'session_retention_days'),
+          cleanup_interval_min: parseIntOrThrow(params.get('cleanup_interval_min'), 'cleanup_interval_min'),
         };
         await settingsService.setMany(patch);
         const waView = await getWaView(waStatusProvider);
-        const html = renderHtml(settingsService.get(), waView, 'Configuração salva com sucesso.');
+        const html = renderHtml(settingsService.get(), modelOptions, waView, 'Configuração salva com sucesso.');
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
         res.end(html);
         return;

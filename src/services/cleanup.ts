@@ -120,11 +120,22 @@ export async function runCleanupOnce(store: JsonDbStore, settingsService?: Setti
 }
 
 export function startCleanupLoop(store: JsonDbStore, settingsService?: SettingsService): NodeJS.Timeout {
-  const intervalMs = Math.max(60_000, config.cleanup.intervalMin * 60_000);
+  const fallbackIntervalMs = Math.max(60_000, config.cleanup.intervalMin * 60_000);
   // Run once shortly after startup (gives time for initial db creation).
   setTimeout(() => void runCleanupOnce(store, settingsService).catch((err) => logger.warn({ err }, 'cleanup failed')), 5_000);
-  return setInterval(
-    () => void runCleanupOnce(store, settingsService).catch((err) => logger.warn({ err }, 'cleanup failed')),
-    intervalMs,
-  );
+
+  let timer: NodeJS.Timeout;
+  const tick = async () => {
+    try {
+      await runCleanupOnce(store, settingsService);
+    } catch (err) {
+      logger.warn({ err }, 'cleanup failed');
+    } finally {
+      const mins = settingsService?.get().cleanup_interval_min;
+      const nextMs = mins ? Math.max(60_000, mins * 60_000) : fallbackIntervalMs;
+      timer = setTimeout(() => void tick(), nextMs);
+    }
+  };
+  timer = setTimeout(() => void tick(), fallbackIntervalMs);
+  return timer;
 }

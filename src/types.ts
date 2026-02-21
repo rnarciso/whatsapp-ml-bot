@@ -129,11 +129,36 @@ export interface Db {
 }
 
 export interface AppSettings {
+  // OpenAI/OpenAI-compatible
+  openai_base_url: string;
+  openai_api_key: string;
+  openai_model_vision: string;
+  openai_model_vision_fallback: string;
+
+  // Mercado Livre
+  ml_site_id: string;
+  ml_client_id: string;
+  ml_client_secret: string;
+  ml_refresh_token: string;
+  ml_currency_id: string;
+  ml_listing_type_id: string;
+  ml_buying_mode: string;
+  ml_default_quantity: number;
+  ml_dry_run: boolean;
+
+  // WhatsApp flow/safety
   require_command_for_images: boolean;
   photo_collect_window_sec: number;
   max_image_bytes: number;
   max_photos_per_session: number;
+  wa_human_delay_ms_min: number;
+  wa_human_delay_ms_max: number;
+  wa_send_interval_ms: number;
+  wa_send_interval_cap: number;
+
+  // Cleanup/retention
   media_retention_hours: number;
   session_inactive_hours: number;
   session_retention_days: number;
+  cleanup_interval_min: number;
 }

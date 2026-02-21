@@ -393,7 +393,7 @@ export class WhatsAppMlBot {
         continue;
       }
 
-      if (key === 'require_command_for_images') {
+      if (key === 'require_command_for_images' || key === 'ml_dry_run') {
         const b = normalizeYesNo(value);
         if (b == null) return { error: `Valor inválido para ${key}. Use sim/nao.` };
         patch[key] = b;
@@ -699,7 +699,8 @@ export class WhatsAppMlBot {
 	        condition === 'new' || condition === 'used'
 	          ? search.results.filter((r) => r.condition === condition)
 	          : [];
-	      const price = analyzePrices(sameCondition.length >= 5 ? sameCondition : search.results, config.ml.currencyId);
+      const runtime = this.settings.get();
+	      const price = analyzePrices(sameCondition.length >= 5 ? sameCondition : search.results, runtime.ml_currency_id);
 
 	      let applied = false;
 	      await this.store.update((db2) => {
@@ -884,8 +885,8 @@ export class WhatsAppMlBot {
 	      price: s.price ?? null,
 	      categoryId: s.categoryId ?? null,
 	      userInput: s.userInput,
-	      currencyId: config.ml.currencyId,
-	      defaultQuantity: config.ml.defaultQuantity,
+	      currencyId: this.settings.get().ml_currency_id,
+	      defaultQuantity: this.settings.get().ml_default_quantity,
 	    });
 
 	    let categoryAttrs: MlCategoryAttribute[] | null = null;
@@ -1073,7 +1074,11 @@ export class WhatsAppMlBot {
 	      }
 
         await this.sendToGroup(groupId, 'Fotos enviadas. Criando item no Mercado Livre...');
-	      const payload = buildCreateItemPayload(s.draft, pictureIds);
+      const runtime = this.settings.get();
+	      const payload = buildCreateItemPayload(s.draft, pictureIds, {
+        buyingMode: runtime.ml_buying_mode,
+        listingTypeId: runtime.ml_listing_type_id,
+      });
 	      created = await this.ml.createItem(payload);
 
 	      // Persist the created item ID immediately so we don't lose it on partial failures.
