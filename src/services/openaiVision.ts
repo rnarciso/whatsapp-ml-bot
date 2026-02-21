@@ -144,6 +144,16 @@ function guessMimeType(filePath: string): string {
   return 'image/jpeg';
 }
 
+function isInvalidModelError(err: unknown): boolean {
+  const msg =
+    typeof (err as any)?.message === 'string'
+      ? (err as any).message
+      : typeof err === 'string'
+        ? err
+        : '';
+  return /invalid model name/i.test(msg) || /model=.*call [`'"]?\/v1\/models/i.test(msg);
+}
+
 export class OpenAIVisionService {
   private client: OpenAI;
 
@@ -171,80 +181,102 @@ export class OpenAIVisionService {
       },
     ];
 
-    // 1) Try Responses API Structured Outputs (json_schema).
-    try {
-      const rsp = await this.client.responses.parse({
-        model: config.openai.modelVision,
-        input,
-        text: {
-          format: {
-            type: 'json_schema',
-            name: 'ml_product_vision',
-            strict: true,
-            schema: visionJsonSchema(),
+    const runWithModel = async (model: string): Promise<VisionResult> => {
+      // 1) Try Responses API Structured Outputs (json_schema).
+      try {
+        const rsp = await this.client.responses.parse({
+          model,
+          input,
+          text: {
+            format: {
+              type: 'json_schema',
+              name: 'ml_product_vision',
+              strict: true,
+              schema: visionJsonSchema(),
+            },
           },
+        });
+
+        const parsed = rsp.output_parsed;
+        const validated = visionResultZ.parse(parsed);
+        return validated as VisionResult;
+      } catch (err) {
+        if (isInvalidModelError(err)) throw err;
+        logger.warn({ err }, 'OpenAI Responses structured output failed; trying fallbacks');
+      }
+
+      // 2) Try Responses API json_object + zod validation.
+      try {
+        const rsp = await this.client.responses.create({
+          model,
+          input,
+          text: { format: { type: 'json_object' } },
+        });
+
+        const outputText: string = (rsp as any).output_text ?? '';
+        const obj = extractFirstJsonObject(outputText);
+        const validated = visionResultZ.parse(obj);
+        return validated as VisionResult;
+      } catch (err) {
+        if (isInvalidModelError(err)) throw err;
+        logger.warn({ err }, 'OpenAI Responses json_object failed; trying chat.completions');
+      }
+
+      // 3) OpenAI-compatible fallback: Chat Completions (many gateways implement this but not /responses).
+      const chatMessages: any[] = [
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: `${buildPrompt()}\n\nResponda SOMENTE com um JSON válido.` },
+            ...images.map((img) => ({
+              type: 'image_url',
+              image_url: { url: img.image_url, detail: img.detail },
+            })),
+          ],
         },
-      });
+      ];
 
-      const parsed = rsp.output_parsed;
-      const validated = visionResultZ.parse(parsed);
-      return validated as VisionResult;
-    } catch (err) {
-      logger.warn({ err }, 'OpenAI Responses structured output failed; trying fallbacks');
-    }
+      // First attempt with response_format (if supported).
+      try {
+        const rsp = await (this.client as any).chat.completions.create({
+          model,
+          messages: chatMessages,
+          response_format: { type: 'json_object' },
+        });
+        const content = String(rsp?.choices?.[0]?.message?.content ?? '').trim();
+        const obj = extractFirstJsonObject(content);
+        const validated = visionResultZ.parse(obj);
+        return validated as VisionResult;
+      } catch (err) {
+        if (isInvalidModelError(err)) throw err;
+        logger.warn({ err }, 'chat.completions with response_format failed; retrying without response_format');
+      }
 
-    // 2) Try Responses API json_object + zod validation.
-    try {
-      const rsp = await this.client.responses.create({
-        model: config.openai.modelVision,
-        input,
-        text: { format: { type: 'json_object' } },
-      });
-
-      const outputText: string = (rsp as any).output_text ?? '';
-      const obj = extractFirstJsonObject(outputText);
-      const validated = visionResultZ.parse(obj);
-      return validated as VisionResult;
-    } catch (err) {
-      logger.warn({ err }, 'OpenAI Responses json_object failed; trying chat.completions');
-    }
-
-    // 3) OpenAI-compatible fallback: Chat Completions (many gateways implement this but not /responses).
-    const chatMessages: any[] = [
-      {
-        role: 'user',
-        content: [
-          { type: 'text', text: `${buildPrompt()}\n\nResponda SOMENTE com um JSON válido.` },
-          ...images.map((img) => ({
-            type: 'image_url',
-            image_url: { url: img.image_url, detail: img.detail },
-          })),
-        ],
-      },
-    ];
-
-    // First attempt with response_format (if supported).
-    try {
-      const rsp = await (this.client as any).chat.completions.create({
-        model: config.openai.modelVision,
+      const rsp2 = await (this.client as any).chat.completions.create({
+        model,
         messages: chatMessages,
-        response_format: { type: 'json_object' },
       });
-      const content = String(rsp?.choices?.[0]?.message?.content ?? '').trim();
-      const obj = extractFirstJsonObject(content);
-      const validated = visionResultZ.parse(obj);
-      return validated as VisionResult;
-    } catch (err) {
-      logger.warn({ err }, 'chat.completions with response_format failed; retrying without response_format');
-    }
+      const content2 = String(rsp2?.choices?.[0]?.message?.content ?? '').trim();
+      const obj2 = extractFirstJsonObject(content2);
+      const validated2 = visionResultZ.parse(obj2);
+      return validated2 as VisionResult;
+    };
 
-    const rsp2 = await (this.client as any).chat.completions.create({
-      model: config.openai.modelVision,
-      messages: chatMessages,
-    });
-    const content2 = String(rsp2?.choices?.[0]?.message?.content ?? '').trim();
-    const obj2 = extractFirstJsonObject(content2);
-    const validated2 = visionResultZ.parse(obj2);
-    return validated2 as VisionResult;
+    const primaryModel = config.openai.modelVision;
+    try {
+      return await runWithModel(primaryModel);
+    } catch (err) {
+      if (!isInvalidModelError(err)) throw err;
+      const fallback = config.openai.modelVisionFallback?.trim();
+      if (fallback && fallback !== primaryModel) {
+        logger.warn(
+          { primaryModel, fallback },
+          'Configured OPENAI_MODEL_VISION is invalid; retrying with OPENAI_MODEL_VISION_FALLBACK',
+        );
+        return await runWithModel(fallback);
+      }
+      const msg = `Modelo inválido no provedor OpenAI-compatible: "${primaryModel}". Ajuste OPENAI_MODEL_VISION (ou defina OPENAI_MODEL_VISION_FALLBACK).`;
+      throw new Error(msg);
+    }
   }
 }

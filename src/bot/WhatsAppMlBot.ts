@@ -681,9 +681,11 @@ export class WhatsAppMlBot {
       const s1 = (await this.store.read()).sessions[sessionId]!;
       const imagePaths = s1.photos.map((p) => p.filePath);
       const etaSec = Math.max(20, Math.min(90, 15 + imagePaths.length * 12));
+      const tasksAhead = Math.max(0, this.queue.size + this.queue.pending - 1);
+      const queueHint = tasksAhead > 0 ? ` Fila atual: ${tasksAhead} tarefa(s) na frente.` : '';
       await this.sendToGroup(
         s1.groupId,
-        `Iniciando análise da sessão ${s1.id} (${imagePaths.length} foto(s)). ETA: ~${etaSec}s.`,
+        `Iniciando análise da sessão ${s1.id} (${imagePaths.length} foto(s)). ETA: ~${etaSec}s.${queueHint}`,
       );
 
       const vision = await this.vision.analyzeProduct(imagePaths);
@@ -1053,9 +1055,11 @@ export class WhatsAppMlBot {
 	    let pauseOk = false;
 	    try {
         const publishEta = Math.max(25, Math.min(120, 20 + s.photos.length * 10));
+        const tasksAhead = Math.max(0, this.queue.size + this.queue.pending);
+        const queueHint = tasksAhead > 0 ? ` Fila atual: ${tasksAhead} tarefa(s) em processamento.` : '';
         await this.reply(
           groupId,
-          `Iniciando publicação do anúncio (sessão ${s.id}). ETA: ~${publishEta}s. Vou te avisando o progresso.`,
+          `Iniciando publicação do anúncio (sessão ${s.id}). ETA: ~${publishEta}s.${queueHint} Vou te avisando o progresso.`,
           quotedMsg,
         );
 	      // Upload pictures

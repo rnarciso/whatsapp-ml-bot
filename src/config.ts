@@ -35,6 +35,7 @@ const envSchema = z.object({
   OPENAI_API_KEY: z.string().optional(),
   OPENAI_BASE_URL: z.string().optional(),
   OPENAI_MODEL_VISION: z.string().default('gpt-4o-mini'),
+  OPENAI_MODEL_VISION_FALLBACK: z.string().optional(),
 
   ML_SITE_ID: z.string().default('MLB'),
   ML_CLIENT_ID: z.string().optional(),
@@ -122,6 +123,7 @@ export const config = {
     apiKey: openaiApiKey,
     baseUrl: openaiBaseUrl,
     modelVision: env.OPENAI_MODEL_VISION,
+    modelVisionFallback: env.OPENAI_MODEL_VISION_FALLBACK,
   },
   ml: {
     siteId: env.ML_SITE_ID,
