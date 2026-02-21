@@ -134,6 +134,14 @@ function humanCondition(cond: string): string {
   return 'desconhecido';
 }
 
+function shortSessionId(id: string): string {
+  return id.slice(0, 8);
+}
+
+function formatClock(ts: number): string {
+  return new Date(ts).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+}
+
 export class WhatsAppMlBot {
   private sock: ReturnType<typeof makeWASocket> | null = null;
   private connectionState: 'connecting' | 'open' | 'closed' = 'closed';
@@ -627,16 +635,32 @@ export class WhatsAppMlBot {
     if (active.status === 'collecting_photos') {
       this.scheduleAnalysis(active.id, Math.max(1_000, (active.collectUntil ?? nowMs()) - nowMs()));
       if (isNew) {
+        const collectUntil = active.collectUntil ?? nowMs() + appSettings.photo_collect_window_sec * 1000;
+        const analyzeEta = Math.max(20, Math.min(90, 15 + active.photos.length * 12));
         await this.reply(
           groupId,
-          `Recebi a foto. Envie mais fotos desse mesmo item nos próximos ${appSettings.photo_collect_window_sec}s (se quiser). Depois eu analiso e monto o anúncio.\n\n(sessão: ${active.id})`,
+          [
+            `Sessão ${shortSessionId(active.id)} iniciada.`,
+            `Foto recebida com sucesso (${active.photos.length}/${appSettings.max_photos_per_session}).`,
+            `Janela para enviar mais fotos: ${appSettings.photo_collect_window_sec}s (até ${formatClock(collectUntil)}).`,
+            `Se não chegar mais foto, a análise começa automaticamente em seguida (ETA ~${analyzeEta}s).`,
+          ].join('\n'),
           msg,
         );
       } else {
-        await this.reply(groupId, `Foto adicionada à sessão ${active.id}.`, msg);
+        const remainingSec = Math.max(1, Math.ceil(((active.collectUntil ?? nowMs()) - nowMs()) / 1000));
+        await this.reply(
+          groupId,
+          `Foto adicionada à sessão ${shortSessionId(active.id)} (${active.photos.length}/${appSettings.max_photos_per_session}). Início da análise em ~${remainingSec}s.`,
+          msg,
+        );
       }
     } else {
-      await this.reply(groupId, `Foto adicionada à sessão ${active.id}. Se quiser reanalisar: responda "reanalisar".`, msg);
+      await this.reply(
+        groupId,
+        `Foto adicionada à sessão ${shortSessionId(active.id)}. Se quiser rodar uma nova análise com as fotos atuais, responda "reanalisar".`,
+        msg,
+      );
     }
   }
 
@@ -685,11 +709,16 @@ export class WhatsAppMlBot {
       const queueHint = tasksAhead > 0 ? ` Fila atual: ${tasksAhead} tarefa(s) na frente.` : '';
       await this.sendToGroup(
         s1.groupId,
-        `Iniciando análise da sessão ${s1.id} (${imagePaths.length} foto(s)). ETA: ~${etaSec}s.${queueHint}`,
+        [
+          `Análise iniciada - sessão ${shortSessionId(s1.id)}`,
+          `Fotos: ${imagePaths.length}`,
+          `ETA: ~${etaSec}s.${queueHint}`,
+          'Etapa 1/2: visão do produto',
+        ].join('\n'),
       );
 
       const vision = await this.vision.analyzeProduct(imagePaths);
-      await this.sendToGroup(s1.groupId, 'Análise de imagens concluída. Buscando comparáveis no Mercado Livre...');
+      await this.sendToGroup(s1.groupId, 'Etapa 2/2: buscando comparáveis no Mercado Livre...');
       const cat = await this.ml.predictCategory(vision.listing.title);
       const categoryId = cat?.category_id ?? null;
 
@@ -740,7 +769,7 @@ export class WhatsAppMlBot {
         if (groupId) {
           await this.sendToGroup(
             groupId,
-            `Falhei ao analisar este item: ${err?.message ?? String(err)}\nTente enviar a foto novamente ou use "reanalisar".`,
+            `Falha na análise da sessão ${shortSessionId(sessionId)}: ${err?.message ?? String(err)}\nVocê pode enviar nova foto ou responder "reanalisar".`,
           );
         }
 	    }
@@ -1060,20 +1089,24 @@ export class WhatsAppMlBot {
         const queueHint = tasksAhead > 0 ? ` Fila atual: ${tasksAhead} tarefa(s) em processamento.` : '';
         await this.reply(
           groupId,
-          `Iniciando publicação do anúncio (sessão ${s.id}). ETA: ~${publishEta}s.${queueHint} Vou te avisando o progresso.`,
+          [
+            `Publicação iniciada - sessão ${shortSessionId(s.id)}`,
+            `ETA: ~${publishEta}s.${queueHint}`,
+            'Etapa 1/4: upload das fotos',
+          ].join('\n'),
           quotedMsg,
         );
 	      // Upload pictures
 	      const pictureIds: string[] = [];
 	      for (const [idx, p] of s.photos.entries()) {
-          await this.sendToGroup(groupId, `Enviando foto ${idx + 1}/${s.photos.length}...`);
+          await this.sendToGroup(groupId, `Etapa 1/4: enviando foto ${idx + 1}/${s.photos.length}...`);
 	        const buf = await fs.readFile(p.filePath);
 	        const fileName = `photo_${idx + 1}.${fileExtFromMime(p.mimeType)}`;
 	        const uploaded = await this.ml.uploadPicture(buf, fileName, p.mimeType);
 	        pictureIds.push(uploaded.id);
 	      }
 
-        await this.sendToGroup(groupId, 'Fotos enviadas. Criando item no Mercado Livre...');
+        await this.sendToGroup(groupId, 'Etapa 2/4: criando item no Mercado Livre...');
       const runtime = this.settings.get();
 	      const payload = buildCreateItemPayload(s.draft, pictureIds, {
         buyingMode: runtime.ml_buying_mode,
@@ -1094,19 +1127,19 @@ export class WhatsAppMlBot {
 
 	      // Best-effort pause as early as possible (even if createItem already set status=paused).
 	      try {
-          await this.sendToGroup(groupId, 'Item criado. Aplicando pausa de segurança...');
+          await this.sendToGroup(groupId, 'Etapa 3/4: aplicando pausa de segurança...');
 	        await this.ml.pauseItem(created.id);
 	        pauseOk = true;
 	      } catch (err) {
 	        logger.warn({ err, itemId: created.id }, 'failed to pause item (early)');
 	      }
 
-        await this.sendToGroup(groupId, 'Atualizando descrição do anúncio...');
+        await this.sendToGroup(groupId, 'Etapa 4/4: atualizando descrição...');
 	      await this.ml.setDescription(created.id, s.draft.description_ptbr);
 
 	      // Best-effort pause again.
 	      try {
-          await this.sendToGroup(groupId, 'Finalizando: confirmando item pausado...');
+          await this.sendToGroup(groupId, 'Finalizando: confirmando status pausado...');
 	        await this.ml.pauseItem(created.id);
 	        pauseOk = true;
 	      } catch (err) {
