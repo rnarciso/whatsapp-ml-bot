@@ -680,8 +680,14 @@ export class WhatsAppMlBot {
     try {
       const s1 = (await this.store.read()).sessions[sessionId]!;
       const imagePaths = s1.photos.map((p) => p.filePath);
+      const etaSec = Math.max(20, Math.min(90, 15 + imagePaths.length * 12));
+      await this.sendToGroup(
+        s1.groupId,
+        `Iniciando análise da sessão ${s1.id} (${imagePaths.length} foto(s)). ETA: ~${etaSec}s.`,
+      );
 
       const vision = await this.vision.analyzeProduct(imagePaths);
+      await this.sendToGroup(s1.groupId, 'Análise de imagens concluída. Buscando comparáveis no Mercado Livre...');
       const cat = await this.ml.predictCategory(vision.listing.title);
       const categoryId = cat?.category_id ?? null;
 
@@ -717,6 +723,9 @@ export class WhatsAppMlBot {
 	      }
 	    } catch (err: any) {
 	      logger.error({ err, sessionId }, 'analysis failed');
+        const dbNow = await this.store.read();
+        const sNow = dbNow.sessions[sessionId];
+        const groupId = sNow?.groupId;
 	      await this.store.update((db2) => {
 	        const s = db2.sessions[sessionId];
 	        if (!s) return;
@@ -725,6 +734,12 @@ export class WhatsAppMlBot {
 	        s.error = err?.message ?? String(err);
 	        s.updatedAt = nowMs();
 	      });
+        if (groupId) {
+          await this.sendToGroup(
+            groupId,
+            `Falhei ao analisar este item: ${err?.message ?? String(err)}\nTente enviar a foto novamente ou use "reanalisar".`,
+          );
+        }
 	    }
 	  }
 
@@ -1037,15 +1052,23 @@ export class WhatsAppMlBot {
 	    let created: { id: string; permalink?: string; status?: string } | null = null;
 	    let pauseOk = false;
 	    try {
+        const publishEta = Math.max(25, Math.min(120, 20 + s.photos.length * 10));
+        await this.reply(
+          groupId,
+          `Iniciando publicação do anúncio (sessão ${s.id}). ETA: ~${publishEta}s. Vou te avisando o progresso.`,
+          quotedMsg,
+        );
 	      // Upload pictures
 	      const pictureIds: string[] = [];
 	      for (const [idx, p] of s.photos.entries()) {
+          await this.sendToGroup(groupId, `Enviando foto ${idx + 1}/${s.photos.length}...`);
 	        const buf = await fs.readFile(p.filePath);
 	        const fileName = `photo_${idx + 1}.${fileExtFromMime(p.mimeType)}`;
 	        const uploaded = await this.ml.uploadPicture(buf, fileName, p.mimeType);
 	        pictureIds.push(uploaded.id);
 	      }
 
+        await this.sendToGroup(groupId, 'Fotos enviadas. Criando item no Mercado Livre...');
 	      const payload = buildCreateItemPayload(s.draft, pictureIds);
 	      created = await this.ml.createItem(payload);
 
@@ -1062,16 +1085,19 @@ export class WhatsAppMlBot {
 
 	      // Best-effort pause as early as possible (even if createItem already set status=paused).
 	      try {
+          await this.sendToGroup(groupId, 'Item criado. Aplicando pausa de segurança...');
 	        await this.ml.pauseItem(created.id);
 	        pauseOk = true;
 	      } catch (err) {
 	        logger.warn({ err, itemId: created.id }, 'failed to pause item (early)');
 	      }
 
+        await this.sendToGroup(groupId, 'Atualizando descrição do anúncio...');
 	      await this.ml.setDescription(created.id, s.draft.description_ptbr);
 
 	      // Best-effort pause again.
 	      try {
+          await this.sendToGroup(groupId, 'Finalizando: confirmando item pausado...');
 	        await this.ml.pauseItem(created.id);
 	        pauseOk = true;
 	      } catch (err) {
