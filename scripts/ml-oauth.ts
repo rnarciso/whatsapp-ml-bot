@@ -1,6 +1,7 @@
 import 'dotenv/config';
 
 import http from 'node:http';
+import { createHash, randomBytes } from 'node:crypto';
 import { URL } from 'node:url';
 
 function required(name: string): string {
@@ -14,6 +15,7 @@ async function exchangeCode(params: {
   clientSecret: string;
   redirectUri: string;
   code: string;
+  codeVerifier?: string;
 }): Promise<{ access_token: string; refresh_token: string; expires_in: number; user_id?: number }> {
   const form = new URLSearchParams();
   form.set('grant_type', 'authorization_code');
@@ -21,6 +23,7 @@ async function exchangeCode(params: {
   form.set('client_secret', params.clientSecret);
   form.set('code', params.code);
   form.set('redirect_uri', params.redirectUri);
+  if (params.codeVerifier) form.set('code_verifier', params.codeVerifier);
 
   const res = await fetch('https://api.mercadolibre.com/oauth/token', {
     method: 'POST',
@@ -39,10 +42,26 @@ async function exchangeCode(params: {
   };
 }
 
+function toBase64Url(input: Buffer): string {
+  return input
+    .toString('base64')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/g, '');
+}
+
+function buildPkce(): { verifier: string; challenge: string; method: 'S256' } {
+  const verifier = toBase64Url(randomBytes(64));
+  const challenge = toBase64Url(createHash('sha256').update(verifier).digest());
+  return { verifier, challenge, method: 'S256' };
+}
+
 async function main(): Promise<void> {
   const clientId = required('ML_CLIENT_ID');
   const clientSecret = required('ML_CLIENT_SECRET');
   const redirectUri = process.env.ML_REDIRECT_URI ?? 'http://localhost:3333/callback';
+  const usePkce = (process.env.ML_USE_PKCE ?? 'true').toLowerCase() !== 'false';
+  const pkce = usePkce ? buildPkce() : null;
 
   const redirect = new URL(redirectUri);
   const port = Number(redirect.port || '3333');
@@ -51,6 +70,10 @@ async function main(): Promise<void> {
   authUrl.searchParams.set('response_type', 'code');
   authUrl.searchParams.set('client_id', clientId);
   authUrl.searchParams.set('redirect_uri', redirectUri);
+  if (pkce) {
+    authUrl.searchParams.set('code_challenge', pkce.challenge);
+    authUrl.searchParams.set('code_challenge_method', pkce.method);
+  }
 
   const server = http.createServer(async (req, res) => {
     try {
@@ -66,7 +89,13 @@ async function main(): Promise<void> {
         return;
       }
 
-      const tokens = await exchangeCode({ clientId, clientSecret, redirectUri, code });
+      const tokens = await exchangeCode({
+        clientId,
+        clientSecret,
+        redirectUri,
+        code,
+        codeVerifier: pkce?.verifier,
+      });
 
       res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
       res.end('OK. Volte ao terminal.');
@@ -92,6 +121,13 @@ async function main(): Promise<void> {
     console.log('\nAbra este link no navegador para autorizar o app:\n');
     // eslint-disable-next-line no-console
     console.log(authUrl.toString());
+    if (pkce) {
+      // eslint-disable-next-line no-console
+      console.log('\nPKCE: enabled (S256)');
+    } else {
+      // eslint-disable-next-line no-console
+      console.log('\nPKCE: disabled');
+    }
     // eslint-disable-next-line no-console
     console.log(`\nAguardando callback em ${redirectUri} ...\n`);
   });
@@ -102,4 +138,3 @@ main().catch((err) => {
   console.error(err);
   process.exit(1);
 });
-

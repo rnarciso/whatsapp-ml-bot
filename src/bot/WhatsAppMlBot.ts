@@ -119,9 +119,9 @@ function fileExtFromMime(mimeType: string): string {
   return 'jpg';
 }
 
-function findActiveSession(db: Db, groupId: string, userId: string): Session | null {
+function findActiveSession(db: Db, groupId: string, userId: string, scope: 'group' | 'user'): Session | null {
   const active = Object.values(db.sessions)
-    .filter((s) => s.groupId === groupId && s.userId === userId)
+    .filter((s) => s.groupId === groupId && (scope === 'group' || s.userId === userId))
     .filter((s) => !['done', 'cancelled', 'error'].includes(s.status))
     .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
   return active[0] ?? null;
@@ -158,6 +158,28 @@ function formatAnalysisErrorForUser(err: unknown): string {
   return msg;
 }
 
+function parseConditionFromText(raw: string): 'new' | 'used' | 'refurbished' | null {
+  const s = raw.trim().toLowerCase();
+  if (['novo', 'nova', 'new'].includes(s)) return 'new';
+  if (['usado', 'usada', 'used'].includes(s)) return 'used';
+  if (['recondicionado', 'recondicionada', 'refurbished'].includes(s)) return 'refurbished';
+  return null;
+}
+
+function parsePriceModeFromText(raw: string): 'rapido' | 'justo' | 'lucro' | 'manual' | null {
+  const s = raw.trim().toLowerCase();
+  if (['rapido', 'rápido', 'fast'].includes(s)) return 'rapido';
+  if (['justo', 'fair'].includes(s)) return 'justo';
+  if (['lucro', 'profit', 'max'].includes(s)) return 'lucro';
+  if (['manual'].includes(s)) return 'manual';
+  return null;
+}
+
+function parseNumberLoose(raw: string): number | null {
+  const n = Number(raw.trim().replace(/[R$\s]/gi, '').replace(/\./g, '').replace(',', '.'));
+  return Number.isFinite(n) ? n : null;
+}
+
 export class WhatsAppMlBot {
   private sock: ReturnType<typeof makeWASocket> | null = null;
   private connectionState: 'connecting' | 'open' | 'closed' = 'closed';
@@ -181,6 +203,14 @@ export class WhatsAppMlBot {
     private ml: MercadoLivreClient,
     private settings: SettingsService,
   ) {}
+
+  private sessionScope(): 'group' | 'user' {
+    return this.settings.get().session_scope;
+  }
+
+  private conversationMode(): 'guided' | 'kv' {
+    return this.settings.get().conversation_mode;
+  }
 
   async start(): Promise<void> {
     if (this.startPromise) return this.startPromise;
@@ -385,6 +415,8 @@ export class WhatsAppMlBot {
     lines.push('*Configurações (não sensíveis)*');
     const s = this.settings.get();
     lines.push(`- require_command_for_images=${s.require_command_for_images}`);
+    lines.push(`- conversation_mode=${s.conversation_mode}`);
+    lines.push(`- session_scope=${s.session_scope}`);
     lines.push(`- photo_collect_window_sec=${s.photo_collect_window_sec}`);
     lines.push(`- max_image_bytes=${s.max_image_bytes}`);
     lines.push(`- max_photos_per_session=${s.max_photos_per_session}`);
@@ -421,6 +453,20 @@ export class WhatsAppMlBot {
         const b = normalizeYesNo(value);
         if (b == null) return { error: `Valor inválido para ${key}. Use sim/nao.` };
         patch[key] = b;
+        continue;
+      }
+
+      if (key === 'conversation_mode') {
+        const v = value.trim().toLowerCase();
+        if (v !== 'guided' && v !== 'kv') return { error: 'Valor inválido para conversation_mode. Use guided|kv.' };
+        patch[key] = v;
+        continue;
+      }
+
+      if (key === 'session_scope') {
+        const v = value.trim().toLowerCase();
+        if (v !== 'group' && v !== 'user') return { error: 'Valor inválido para session_scope. Use group|user.' };
+        patch[key] = v;
         continue;
       }
 
@@ -492,7 +538,7 @@ export class WhatsAppMlBot {
     let newSessionId: string | null = null;
 
     await this.store.update((db) => {
-      const old = findActiveSession(db, groupId, userId);
+      const old = findActiveSession(db, groupId, userId, this.sessionScope());
       if (old) {
         oldSessionId = old.id;
         old.status = 'cancelled';
@@ -543,7 +589,7 @@ export class WhatsAppMlBot {
     if (!this.sock) return;
     const appSettings = this.settings.get();
     const preDb = await this.store.read();
-    const preActive = findActiveSession(preDb, groupId, userId);
+    const preActive = findActiveSession(preDb, groupId, userId, this.sessionScope());
     if (appSettings.require_command_for_images && (!preActive || preActive.status !== 'collecting_photos')) {
       await this.maybeWarnNeedNewSession(groupId, userId, msg);
       return;
@@ -605,7 +651,7 @@ export class WhatsAppMlBot {
     let isNew = false;
     let rejectedByMaxPhotos = false;
     await this.store.update((db) => {
-      let s = findActiveSession(db, groupId, userId);
+      let s = findActiveSession(db, groupId, userId, this.sessionScope());
       if (!s) {
         s = {
           id: crypto.randomUUID(),
@@ -825,6 +871,7 @@ export class WhatsAppMlBot {
       lines.push(`- Mediana: ${formatBRL(price.median)}`);
       lines.push(`- Preço justo (sugestão): ${formatBRL(price.suggested_fair)}`);
       lines.push(`- Vender rápido (sugestão): ${formatBRL(price.suggested_fast)}`);
+      lines.push(`- Maior lucro (sugestão): ${formatBRL(price.suggested_profit)}`);
 
       const examples = price.comparables.slice(0, 5);
       if (examples.length) {
@@ -837,15 +884,22 @@ export class WhatsAppMlBot {
     }
 
     lines.push('');
-    lines.push('*Para eu montar o anúncio e deixar PAUSADO para revisão, responda com:*');
-    lines.push('condicao=novo|usado');
-    if (price) lines.push('usar_preco=rapido|justo|manual');
-    lines.push('preco=1234 (opcional, sobrescreve tudo)');
-    lines.push('marca=...');
-    lines.push('modelo=...');
-    lines.push('obs=... (opcional)');
-    lines.push('');
-    lines.push(`(sessão: ${sessionId})`);
+    if (this.conversationMode() === 'guided') {
+      lines.push('Agora vou te fazer perguntas curtas para fechar o anúncio e deixar PAUSADO para revisão.');
+      lines.push('Se preferir, ainda funciona responder com chave=valor.');
+      lines.push('');
+      lines.push(`(sessão: ${sessionId})`);
+    } else {
+      lines.push('*Para eu montar o anúncio e deixar PAUSADO para revisão, responda com:*');
+      lines.push('condicao=novo|usado');
+      if (price) lines.push('usar_preco=rapido|justo|lucro|manual');
+      lines.push('preco=1234 (opcional, sobrescreve tudo)');
+      lines.push('marca=...');
+      lines.push('modelo=...');
+      lines.push('obs=... (opcional)');
+      lines.push('');
+      lines.push(`(sessão: ${sessionId})`);
+    }
 
     if (vision.questions?.length) {
       lines.push('');
@@ -856,6 +910,146 @@ export class WhatsAppMlBot {
     }
 
     return lines.join('\n');
+  }
+
+  private buildGuidedPrompt(
+    session: Session,
+    missing: string[],
+    missingRequiredAttrs: Array<{ id: string; name: string; value_type?: string; values?: MlCategoryAttribute['values'] }>,
+  ): { field: string; text: string } | null {
+    if (missing.includes('categoria_id')) {
+      return {
+        field: 'categoria_id',
+        text: 'Não consegui fechar a categoria automaticamente. Me envie o `categoria_id` do ML (ex.: MLB1234).',
+      };
+    }
+
+    if (missing.includes('condicao')) {
+      return {
+        field: 'condicao',
+        text: 'Qual a condição do produto? Responda com: novo, usado ou recondicionado.',
+      };
+    }
+
+    if (missing.includes('preco')) {
+      if (session.price) {
+        return {
+          field: 'usar_preco',
+          text: [
+            'Qual estratégia de preço você quer?',
+            `- rapido (${formatBRL(session.price.suggested_fast)})`,
+            `- justo (${formatBRL(session.price.suggested_fair)})`,
+            `- lucro (${formatBRL(session.price.suggested_profit)})`,
+            '- manual',
+          ].join('\n'),
+        };
+      }
+      return {
+        field: 'preco_manual',
+        text: 'Não consegui estimar o preço automático. Qual preço de anúncio você quer? (ex.: 1299,90)',
+      };
+    }
+
+    if (missingRequiredAttrs.length) {
+      const a = missingRequiredAttrs[0]!;
+      const opts =
+        a.values
+          ?.slice(0, 5)
+          .map((v) => {
+            const name = v.name?.trim();
+            const id = v.id?.trim();
+            if (name && id) return `${name} (@${id})`;
+            if (name) return name;
+            if (id) return `@${id}`;
+            return null;
+          })
+          .filter(Boolean) ?? [];
+      const suffix = opts.length ? `\nOpções: ${opts.join(', ')}` : '';
+      return {
+        field: `attr:${a.id}`,
+        text: `Preciso de ${a.name} (${a.id}) para publicar.${suffix}\nPode responder com texto livre ou @id.`,
+      };
+    }
+
+    return null;
+  }
+
+  private async handleGuidedReply(session: Session, text: string, msg: WAMessage): Promise<boolean> {
+    if (this.conversationMode() !== 'guided') return false;
+
+    const field = session.pendingField?.trim();
+    if (!field) {
+      await this.generatePreview(session.id, msg);
+      return true;
+    }
+
+    const patch: Record<string, string> = {};
+    if (field === 'condicao') {
+      const cond = parseConditionFromText(text);
+      if (!cond) {
+        await this.reply(session.groupId, 'Resposta inválida para condição. Use: novo, usado ou recondicionado.', msg);
+        return true;
+      }
+      patch.condicao = cond === 'new' ? 'novo' : cond === 'used' ? 'usado' : 'recondicionado';
+    } else if (field === 'usar_preco') {
+      const mode = parsePriceModeFromText(text);
+      if (mode === 'manual') {
+        await this.store.update((db2) => {
+          const s2 = db2.sessions[session.id];
+          if (!s2) return;
+          s2.pendingField = 'preco_manual';
+          s2.updatedAt = nowMs();
+        });
+        await this.reply(session.groupId, 'Perfeito. Qual preço manual? (ex.: 1299,90)', msg);
+        return true;
+      }
+      if (mode) {
+        patch.usar_preco = mode;
+      } else {
+        const n = parseNumberLoose(text);
+        if (!n || n <= 0) {
+          await this.reply(session.groupId, 'Escolha: rapido, justo, lucro ou manual. Se preferir, envie direto um preço numérico.', msg);
+          return true;
+        }
+        patch.preco = String(n);
+      }
+    } else if (field === 'preco_manual') {
+      const n = parseNumberLoose(text);
+      if (!n || n <= 0) {
+        await this.reply(session.groupId, 'Preço inválido. Envie um número, por exemplo: 1299,90', msg);
+        return true;
+      }
+      patch.preco = String(n);
+    } else if (field === 'categoria_id') {
+      const v = text.trim().toUpperCase();
+      if (!v) {
+        await this.reply(session.groupId, 'categoria_id inválido. Envie algo como: MLB1234', msg);
+        return true;
+      }
+      patch.categoria_id = v;
+    } else if (field.startsWith('attr:')) {
+      const attrId = field.slice('attr:'.length).trim();
+      const raw = text.trim();
+      if (!attrId || !raw) {
+        await this.reply(session.groupId, 'Valor inválido. Tente novamente com um texto simples ou @id.', msg);
+        return true;
+      }
+      patch[attrId] = raw;
+    } else {
+      await this.generatePreview(session.id, msg);
+      return true;
+    }
+
+    await this.store.update((db2) => {
+      const s2 = db2.sessions[session.id];
+      if (!s2) return;
+      s2.userInput = { ...(s2.userInput ?? {}), ...patch };
+      delete s2.pendingField;
+      s2.updatedAt = nowMs();
+    });
+
+    await this.generatePreview(session.id, msg);
+    return true;
   }
 
   private async handleText(groupId: string, userId: string, text: string, msg: WAMessage): Promise<void> {
@@ -869,7 +1063,7 @@ export class WhatsAppMlBot {
 
     if (t.toLowerCase() === 'reanalisar') {
       const db = await this.store.read();
-      const active = findActiveSession(db, groupId, userId);
+      const active = findActiveSession(db, groupId, userId, this.sessionScope());
       if (!active) {
         await this.reply(groupId, 'Não encontrei sessão ativa para reanalisar.', msg);
         return;
@@ -887,7 +1081,7 @@ export class WhatsAppMlBot {
     }
 
     const db = await this.store.read();
-    const session = findActiveSession(db, groupId, userId);
+    const session = findActiveSession(db, groupId, userId, this.sessionScope());
     if (!session) return;
 
     if (session.status === 'awaiting_confirmation' && t.toLowerCase() === 'confirmar') {
@@ -898,10 +1092,21 @@ export class WhatsAppMlBot {
     if (!['awaiting_user_info', 'awaiting_confirmation'].includes(session.status)) return;
 
     const kv = parseKeyValueLines(text);
+    if (session.status === 'awaiting_user_info' && Object.keys(kv).length === 0) {
+      const handled = await this.handleGuidedReply(session, t, msg);
+      if (handled) return;
+    }
+
+    if (Object.keys(kv).length === 0) {
+      await this.reply(groupId, 'Envie a correção em chave=valor (ex.: preco=999) ou responda *confirmar*.', msg);
+      return;
+    }
+
     await this.store.update((db2) => {
       const s = db2.sessions[session.id];
       if (!s) return;
       s.userInput = { ...(s.userInput ?? {}), ...kv };
+      delete s.pendingField;
       s.updatedAt = nowMs();
     });
 
@@ -910,7 +1115,7 @@ export class WhatsAppMlBot {
 
   private async cancelActiveSession(groupId: string, userId: string, msg: WAMessage): Promise<void> {
     const db = await this.store.read();
-    const session = findActiveSession(db, groupId, userId);
+    const session = findActiveSession(db, groupId, userId, this.sessionScope());
     if (!session) {
       await this.reply(groupId, 'Não há sessão ativa para cancelar.', msg);
       return;
@@ -1003,13 +1208,23 @@ export class WhatsAppMlBot {
 	      }
 	    }
 
+    const guided = this.conversationMode() === 'guided';
+    const guidedPrompt = guided ? this.buildGuidedPrompt(s, missing, missingRequiredAttrs) : null;
+
     await this.store.update((db2) => {
       const s2 = db2.sessions[sessionId];
       if (!s2) return;
       s2.draft = draft;
       s2.status = missing.length || missingRequiredAttrs.length ? 'awaiting_user_info' : 'awaiting_confirmation';
+      if (s2.status === 'awaiting_user_info' && guidedPrompt) s2.pendingField = guidedPrompt.field;
+      else delete s2.pendingField;
       s2.updatedAt = nowMs();
     });
+
+    if (guidedPrompt && (missing.length || missingRequiredAttrs.length)) {
+      await this.reply(s.groupId, guidedPrompt.text, quotedMsg);
+      return;
+    }
 
 	    const preview = this.buildPreviewMessage(s, draft, missing, missingRequiredAttrs, warnings);
 	    await this.reply(s.groupId, preview, quotedMsg);
@@ -1031,8 +1246,10 @@ export class WhatsAppMlBot {
     lines.push(`- Condição: ${humanCondition(draft.condition)}`);
     lines.push(`- Quantidade: ${draft.quantity}`);
     lines.push(`- Preço escolhido: ${draft.price_chosen ? formatBRL(draft.price_chosen) : '(faltando)'}`);
-    if (draft.price_fair && draft.price_fast) {
-      lines.push(`- Sugestões: justo ${formatBRL(draft.price_fair)} | rápido ${formatBRL(draft.price_fast)}`);
+    if (draft.price_fair && draft.price_fast && session.price?.suggested_profit) {
+      lines.push(
+        `- Sugestões: justo ${formatBRL(draft.price_fair)} | rápido ${formatBRL(draft.price_fast)} | lucro ${formatBRL(session.price.suggested_profit)}`,
+      );
     }
     lines.push(`- Fotos: ${session.photos.length}`);
 
@@ -1069,13 +1286,17 @@ export class WhatsAppMlBot {
 	        lines.push(line);
 	      });
 	      lines.push('');
-	      lines.push('Responda com chave=valor, por exemplo:');
-	      if (missing.includes('condicao')) lines.push('condicao=usado');
-	      if (missing.includes('preco')) lines.push('usar_preco=rapido');
-	      lines.push('Dica: para usar um value_id, escreva ATTRIBUTE=@id (ex.: COLOR=@52005).');
-	      missingRequiredAttrs.slice(0, 4).forEach((a) => lines.push(`${a.id}=...`));
-	      return lines.join('\n');
-	    }
+      if (this.conversationMode() === 'guided') {
+        lines.push('Vou pedir esses campos em sequência, em mensagens curtas.');
+      } else {
+        lines.push('Responda com chave=valor, por exemplo:');
+        if (missing.includes('condicao')) lines.push('condicao=usado');
+        if (missing.includes('preco')) lines.push('usar_preco=rapido');
+        lines.push('Dica: para usar um value_id, escreva ATTRIBUTE=@id (ex.: COLOR=@52005).');
+        missingRequiredAttrs.slice(0, 4).forEach((a) => lines.push(`${a.id}=...`));
+      }
+      return lines.join('\n');
+    }
 
     lines.push('');
     lines.push('Se estiver tudo certo, responda: *confirmar*');

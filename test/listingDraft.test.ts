@@ -41,6 +41,7 @@ const price: PriceAnalysis = {
   max: 3000,
   suggested_fair: 2000,
   suggested_fast: 1500,
+  suggested_profit: 2400,
   comparables: [],
 };
 
@@ -70,6 +71,18 @@ describe('buildListingDraft', () => {
     expect(draft.price_chosen).toBeCloseTo(1234.56);
   });
 
+  it('supports lucro strategy', () => {
+    const draft = buildListingDraft({
+      vision: makeVision(),
+      price,
+      categoryId: 'MLB1055',
+      userInput: { usar_preco: 'lucro', condicao: 'usado' },
+      currencyId: 'BRL',
+      defaultQuantity: 1,
+    });
+    expect(draft.price_chosen).toBe(2400);
+  });
+
   it('supports value_id via @ on brand/model', () => {
     const draft = buildListingDraft({
       vision: makeVision(),
@@ -83,4 +96,3 @@ describe('buildListingDraft', () => {
     expect(draft.attributes.MODEL?.value_id).toBe('456');
   });
 });
-

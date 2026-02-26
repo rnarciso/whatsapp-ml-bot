@@ -13,10 +13,12 @@ const envSchema = z.object({
   WA_ALLOWED_GROUP_IDS: z.string().optional(),
   PHOTO_COLLECT_WINDOW_SEC: z.coerce.number().int().min(5).max(300).default(45),
   WA_REQUIRE_COMMAND_FOR_IMAGES: z.preprocess((v) => {
-    if (v === undefined) return true;
+    if (v === undefined) return false;
     const s = typeof v === 'string' ? v.trim().toLowerCase() : '';
     return ['1', 'true', 'yes', 'y', 'sim', 's'].includes(s);
   }, z.boolean()),
+  BOT_CONVERSATION_MODE: z.enum(['guided', 'kv']).default('guided'),
+  BOT_SESSION_SCOPE: z.enum(['group', 'user']).default('group'),
   WA_MAX_IMAGE_BYTES: z.coerce.number().int().min(0).max(50_000_000).default(10_000_000),
   WA_HUMAN_DELAY_MS_MIN: z.coerce.number().int().min(0).max(30_000).default(1_000),
   WA_HUMAN_DELAY_MS_MAX: z.coerce.number().int().min(0).max(30_000).default(3_000),
@@ -100,6 +102,8 @@ export const config = {
   photoCollectWindowSec: env.PHOTO_COLLECT_WINDOW_SEC,
   wa: {
     requireCommandForImages: env.WA_REQUIRE_COMMAND_FOR_IMAGES,
+    conversationMode: env.BOT_CONVERSATION_MODE,
+    sessionScope: env.BOT_SESSION_SCOPE,
     maxImageBytes: env.WA_MAX_IMAGE_BYTES,
     humanDelayMsMin: Math.min(env.WA_HUMAN_DELAY_MS_MIN, env.WA_HUMAN_DELAY_MS_MAX),
     humanDelayMsMax: Math.max(env.WA_HUMAN_DELAY_MS_MIN, env.WA_HUMAN_DELAY_MS_MAX),

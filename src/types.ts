@@ -76,6 +76,7 @@ export interface PriceAnalysis {
   max: number;
   suggested_fair: number;
   suggested_fast: number;
+  suggested_profit: number;
   comparables: ComparableItem[];
 }
 
@@ -113,6 +114,7 @@ export interface Session {
   userInput?: Record<string, string>;
   draft?: ListingDraft;
   published?: PublishedItem;
+  pendingField?: string;
   lastBotMessageId?: string;
   error?: string;
 }
@@ -148,6 +150,8 @@ export interface AppSettings {
 
   // WhatsApp flow/safety
   require_command_for_images: boolean;
+  conversation_mode: 'guided' | 'kv';
+  session_scope: 'group' | 'user';
   photo_collect_window_sec: number;
   max_image_bytes: number;
   max_photos_per_session: number;

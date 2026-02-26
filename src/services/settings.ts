@@ -22,6 +22,8 @@ const settingsSchema = z.object({
   ml_dry_run: z.boolean(),
 
   require_command_for_images: z.boolean(),
+  conversation_mode: z.enum(['guided', 'kv']),
+  session_scope: z.enum(['group', 'user']),
   photo_collect_window_sec: z.number().int().min(5).max(300),
   max_image_bytes: z.number().int().min(0).max(50_000_000),
   max_photos_per_session: z.number().int().min(1).max(20),
@@ -52,6 +54,8 @@ const DEFAULT_SETTINGS: AppSettings = {
   ml_dry_run: config.ml.dryRun,
 
   require_command_for_images: config.wa.requireCommandForImages,
+  conversation_mode: config.wa.conversationMode,
+  session_scope: config.wa.sessionScope,
   photo_collect_window_sec: config.photoCollectWindowSec,
   max_image_bytes: config.wa.maxImageBytes,
   max_photos_per_session: 8,
@@ -109,6 +113,8 @@ export class SettingsService {
 
 export const mutableSettingsForChat: Array<{ key: MutableSettingKey; description: string }> = [
   { key: 'require_command_for_images', description: 'Exigir !ml-bot novo antes de aceitar fotos' },
+  { key: 'conversation_mode', description: 'Modo de conversa: guided (perguntas guiadas) ou kv (chave=valor)' },
+  { key: 'session_scope', description: 'Escopo da sessao: group (colaborativo) ou user (por usuario)' },
   { key: 'photo_collect_window_sec', description: 'Janela de coleta de fotos (segundos)' },
   { key: 'max_image_bytes', description: 'Tamanho maximo da imagem (bytes)' },
   { key: 'max_photos_per_session', description: 'Quantidade maxima de fotos por anuncio' },

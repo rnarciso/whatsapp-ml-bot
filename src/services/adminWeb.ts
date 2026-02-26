@@ -54,6 +54,10 @@ function renderHtml(
 ): string {
   const checked = settings.require_command_for_images ? 'checked' : '';
   const mlDryRunChecked = settings.ml_dry_run ? 'checked' : '';
+  const guidedSelected = settings.conversation_mode === 'guided' ? 'selected' : '';
+  const kvSelected = settings.conversation_mode === 'kv' ? 'selected' : '';
+  const scopeGroupSelected = settings.session_scope === 'group' ? 'selected' : '';
+  const scopeUserSelected = settings.session_scope === 'user' ? 'selected' : '';
   const modelDatalist = modelOptions.map((m) => `<option value="${esc(m)}"></option>`).join('');
   return `<!doctype html>
 <html lang="pt-BR">
@@ -72,7 +76,7 @@ function renderHtml(
 	      p { color: var(--muted); margin: 0 0 16px; }
 	      form { display: grid; gap: 10px; }
 	      label { display:grid; gap:4px; font-size: 14px; }
-      input[type=number], input[type=text] { border:1px solid var(--line); border-radius:8px; padding:10px; font-size:14px; }
+      input[type=number], input[type=text], select { border:1px solid var(--line); border-radius:8px; padding:10px; font-size:14px; }
       .row { display:flex; align-items:center; gap:8px; }
       .btn { border:0; background:#111827; color:#fff; border-radius:8px; padding:10px 14px; cursor:pointer; width: fit-content; }
       .flash { margin: 0 0 12px; border:1px solid #a7f3d0; background:var(--okbg); color:var(--ok); border-radius:8px; padding:10px; font-size:14px; }
@@ -189,6 +193,20 @@ function renderHtml(
           <label class="row">
             <input type="checkbox" name="require_command_for_images" value="1" ${checked} />
             Exigir <code>!ml-bot novo</code> antes de aceitar fotos
+          </label>
+          <label>
+            Modo de conversa
+            <select name="conversation_mode">
+              <option value="guided" ${guidedSelected}>guided (perguntas guiadas)</option>
+              <option value="kv" ${kvSelected}>kv (chave=valor)</option>
+            </select>
+          </label>
+          <label>
+            Escopo da sessão
+            <select name="session_scope">
+              <option value="group" ${scopeGroupSelected}>group (uma sessão colaborativa por grupo)</option>
+              <option value="user" ${scopeUserSelected}>user (uma sessão por usuário)</option>
+            </select>
           </label>
 
           <label>
@@ -529,6 +547,14 @@ export function startAdminWebServer(
       if (req.method === 'POST' && pathname === '/settings') {
         const body = await readBody(req);
         const params = new URLSearchParams(body);
+        const conversationModeRaw = (params.get('conversation_mode') ?? '').trim().toLowerCase();
+        const sessionScopeRaw = (params.get('session_scope') ?? '').trim().toLowerCase();
+        if (conversationModeRaw !== 'guided' && conversationModeRaw !== 'kv') {
+          throw new Error('Valor inválido para conversation_mode');
+        }
+        if (sessionScopeRaw !== 'group' && sessionScopeRaw !== 'user') {
+          throw new Error('Valor inválido para session_scope');
+        }
         const patch = {
           openai_base_url: (params.get('openai_base_url') ?? '').trim(),
           openai_api_key: (params.get('openai_api_key') ?? '').trim(),
@@ -544,6 +570,8 @@ export function startAdminWebServer(
           ml_default_quantity: parseIntOrThrow(params.get('ml_default_quantity'), 'ml_default_quantity'),
           ml_dry_run: parseBool(params.get('ml_dry_run')),
           require_command_for_images: parseBool(params.get('require_command_for_images')),
+          conversation_mode: conversationModeRaw as AppSettings['conversation_mode'],
+          session_scope: sessionScopeRaw as AppSettings['session_scope'],
           photo_collect_window_sec: parseIntOrThrow(params.get('photo_collect_window_sec'), 'photo_collect_window_sec'),
           max_image_bytes: parseIntOrThrow(params.get('max_image_bytes'), 'max_image_bytes'),
           max_photos_per_session: parseIntOrThrow(params.get('max_photos_per_session'), 'max_photos_per_session'),

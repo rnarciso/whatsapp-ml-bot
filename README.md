@@ -8,7 +8,7 @@ Bot para ficar em **grupo do WhatsApp** e:
 
 - receber fotos de produtos no grupo
 - identificar o item (visão + texto)
-- buscar similares no Mercado Livre para estimar **preço justo** e **preço para vender rápido**
+- buscar similares no Mercado Livre para estimar **preço justo**, **preço para vender rápido** e **preço para maior lucro**
 - montar um anúncio e **publicar como PAUSADO** (para revisão antes de ativar)
 
 ## Aviso importante (WhatsApp)
@@ -41,7 +41,9 @@ cp .env.example .env
 - (Opcional) `OPENAI_BASE_URL` para usar um endpoint OpenAI-compatible (ex.: LiteLLM)
 - Mercado Livre: `ML_CLIENT_ID`, `ML_CLIENT_SECRET`, `ML_REFRESH_TOKEN` (obrigatório para publicar)
 - Opcional: `WA_ALLOWED_GROUP_IDS` para limitar em quais grupos o bot responde
-- (Opcional, recomendado em grupos "não dedicados"): `WA_REQUIRE_COMMAND_FOR_IMAGES=true` para só processar fotos após `!ml-bot novo`
+- (Opcional): `WA_REQUIRE_COMMAND_FOR_IMAGES=true` para só processar fotos após `!ml-bot novo` (default agora é `false`)
+- (Opcional): `BOT_CONVERSATION_MODE=guided|kv` (`guided` faz perguntas curtas, `kv` mantém chave=valor)
+- (Opcional): `BOT_SESSION_SCOPE=group|user` (`group` = sessão colaborativa por grupo)
 - (Opcional): `WA_MAX_IMAGE_BYTES` para limitar o tamanho das imagens aceitas (evita DoS por imagens gigantes)
 - (Opcional): `STORAGE_ENCRYPTION_KEY` para criptografar os tokens do Mercado Livre no `db.json`
 - (Opcional): painel web local (`ADMIN_WEB_ENABLED`, `ADMIN_WEB_HOST`, `ADMIN_WEB_PORT`)
@@ -102,13 +104,15 @@ npm run ml:oauth
 
 ## Uso no grupo
 
+- Com configuração padrão, basta enviar a foto no grupo e o bot inicia a sessão automaticamente.
 - Se `WA_REQUIRE_COMMAND_FOR_IMAGES=true`: primeiro envie `!ml-bot novo` e depois envie as fotos do produto.
 - Envie 1 ou mais fotos do mesmo produto. O bot aguarda `PHOTO_COLLECT_WINDOW_SEC` segundos para juntar várias fotos.
 - Depois ele responde com:
   - identificação do produto
   - comparáveis e preços do Mercado Livre
   - perguntas rápidas (ex.: condição, detalhes, defeitos)
-- Responda com `chave=valor` (o bot mostra o template).
+- No modo `guided` (padrão), responda às perguntas curtas do bot (condição, estratégia de preço, atributos).
+- No modo `kv`, responda com `chave=valor` (o bot mostra o template).
 - Quando estiver ok, responda `confirmar` para publicar (como **pausado**).
 
 ## Comandos rápidos

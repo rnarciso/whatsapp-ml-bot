@@ -57,6 +57,7 @@ export function buildListingDraft(params: {
     if (!price) return null;
     if (mode === 'justo') return price.suggested_fair;
     if (mode === 'rapido' || mode === 'rápido' || mode === 'fast') return price.suggested_fast;
+    if (mode === 'lucro' || mode === 'profit') return price.suggested_profit;
     if (mode === 'manual') return parseNumberLoose(input.preco_manual ?? input.manual_price ?? '');
 
     // Default: sell fast.

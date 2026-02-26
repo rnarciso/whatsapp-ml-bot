@@ -41,6 +41,8 @@ export function analyzePrices(items: ComparableItem[], preferredCurrency?: strin
   const suggestedFair = roundTo(median, step);
   let suggestedFast = roundDownTo(Math.min(q25, median * 0.9), step);
   if (suggestedFast >= suggestedFair) suggestedFast = Math.max(step, suggestedFair - step);
+  let suggestedProfit = roundTo(Math.max(q75, median * 1.1), step);
+  if (suggestedProfit <= suggestedFair) suggestedProfit = suggestedFair + step;
 
   const currencyId = preferredCurrency ?? filtered[0]!.currency_id;
   return {
@@ -53,7 +55,7 @@ export function analyzePrices(items: ComparableItem[], preferredCurrency?: strin
     max,
     suggested_fair: suggestedFair,
     suggested_fast: suggestedFast,
+    suggested_profit: suggestedProfit,
     comparables: filtered.slice(0, 10),
   };
 }
-
