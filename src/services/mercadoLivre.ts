@@ -66,6 +66,14 @@ function urlJoin(base: string, path: string): string {
   return `${base.replace(/\/+$/, '')}${path.startsWith('/') ? '' : '/'}${path}`;
 }
 
+function safeJsonLower(value: unknown): string {
+  try {
+    return JSON.stringify(value ?? {}).toLowerCase();
+  } catch {
+    return '';
+  }
+}
+
 export class MercadoLivreClient {
   private baseUrl = 'https://api.mercadolibre.com';
   private tokens: MlTokens | null = null;
@@ -295,9 +303,61 @@ export class MercadoLivreClient {
       return { id: 'DRY_RUN_ITEM_ID', status: 'paused' };
     }
 
-    const data = await this.apiFetch<any>('POST', '/items', { auth: true, body: payload as any });
-    if (!data || !asString(data.id)) throw new Error('Invalid create item response');
-    return { id: data.id, permalink: asString(data.permalink) ? data.permalink : undefined, status: asString(data.status) ? data.status : undefined };
+    const parseResult = (data: any): MlCreateItemResult => {
+      if (!data || !asString(data.id)) throw new Error('Invalid create item response');
+      return { id: data.id, permalink: asString(data.permalink) ? data.permalink : undefined, status: asString(data.status) ? data.status : undefined };
+    };
+
+    const adjustPayload = (current: Record<string, unknown>, errData: any): Record<string, unknown> | null => {
+      const message = asString(errData?.message) ? errData.message.toLowerCase() : '';
+      const errorText = asString(errData?.error) ? errData.error.toLowerCase() : '';
+      const lower = safeJsonLower(errData);
+
+      const invalidTitle =
+        (message === 'body.invalid_fields' && (errorText.includes('[title]') || lower.includes('[title]'))) ||
+        lower.includes('fields [title] are invalid');
+      const missingFamilyName =
+        (message === 'body.required_fields' && (errorText.includes('[family_name]') || lower.includes('[family_name]'))) ||
+        lower.includes('family_name');
+      if (!invalidTitle && !missingFamilyName) return null;
+
+      const next: Record<string, unknown> = { ...current };
+      const currentTitle = asString(next.title) ? next.title.trim() : '';
+      let changed = false;
+
+      if (missingFamilyName && !asString(next.family_name) && currentTitle) {
+        next.family_name = currentTitle;
+        changed = true;
+      }
+      if (invalidTitle && 'title' in next) {
+        delete next.title;
+        changed = true;
+      }
+      if (invalidTitle && !asString(next.family_name) && currentTitle) {
+        next.family_name = currentTitle;
+        changed = true;
+      }
+
+      if (!changed) return null;
+      logger.warn({ invalidTitle, missingFamilyName }, 'Retrying createItem with catalog-safe payload');
+      return next;
+    };
+
+    let currentPayload: Record<string, unknown> = { ...payload };
+    let lastErr: unknown;
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      try {
+        const data = await this.apiFetch<any>('POST', '/items', { auth: true, body: currentPayload as any });
+        return parseResult(data);
+      } catch (err: any) {
+        lastErr = err;
+        if (attempt >= 3) break;
+        const nextPayload = adjustPayload(currentPayload, err?.data);
+        if (!nextPayload) break;
+        currentPayload = nextPayload;
+      }
+    }
+    throw lastErr;
   }
 
   async getCategoryAttributes(categoryId: string): Promise<MlCategoryAttribute[]> {
