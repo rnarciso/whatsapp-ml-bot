@@ -28,6 +28,11 @@ export interface MlCreateItemResult {
   status?: string;
 }
 
+export interface MlItemValidationResult {
+  valid: boolean;
+  warnings?: Array<{ code?: string; message?: string }>;
+}
+
 export interface MlCategoryAttribute {
   id: string;
   name: string;
@@ -358,6 +363,31 @@ export class MercadoLivreClient {
       }
     }
     throw lastErr;
+  }
+
+  async validateItem(payload: Record<string, unknown>): Promise<MlItemValidationResult> {
+    if (this.runtime().dryRun) return { valid: true };
+
+    const data = await this.apiFetch<any>('POST', '/items/validate', { auth: true, body: payload as any });
+    const warnings = Array.isArray(data?.warnings)
+      ? data.warnings.map((w: any) => ({
+          code: asString(w?.code) ? w.code : undefined,
+          message: asString(w?.message) ? w.message : undefined,
+        }))
+      : undefined;
+    return { valid: true, warnings };
+  }
+
+  async getDescription(itemId: string): Promise<string | null> {
+    if (this.runtime().dryRun) return null;
+    try {
+      const data = await this.apiFetch<any>('GET', `/items/${itemId}/description`, { auth: true });
+      if (asString(data?.plain_text) && data.plain_text.trim()) return data.plain_text.trim();
+      return null;
+    } catch (err: any) {
+      if (err?.status === 404) return null;
+      throw err;
+    }
   }
 
   async getCategoryAttributes(categoryId: string): Promise<MlCategoryAttribute[]> {

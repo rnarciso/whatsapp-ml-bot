@@ -21,7 +21,7 @@ import { buildCreateItemPayload } from '../services/mlPayload.js';
 import type { OpenAIVisionService } from '../services/openaiVision.js';
 import { analyzePrices } from '../services/pricing.js';
 import { mutableSettingsForChat, type SettingsService } from '../services/settings.js';
-import type { Db, Session } from '../types.js';
+import type { Db, ListingDraft, Session, VisionResult } from '../types.js';
 import { ensureDir, writeFileAtomic } from '../utils/fs.js';
 import { formatBRL } from '../utils/format.js';
 import { normalizeYesNo, parseKeyValueLines } from '../utils/kv.js';
@@ -1129,6 +1129,142 @@ export class WhatsAppMlBot {
     await this.reply(groupId, `Sessão ${session.id} cancelada.`, msg);
   }
 
+  private normalizeAttrText(value: string): string {
+    return value
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, ' ')
+      .trim();
+  }
+
+  private pickAttributeOption(
+    attr: MlCategoryAttribute,
+    preferredNames: Array<string | null | undefined>,
+  ): { value_id?: string; value_name?: string } | null {
+    const cleaned = preferredNames.map((v) => (v ?? '').trim()).filter(Boolean);
+    const values = attr.values ?? [];
+
+    if (values.length) {
+      if (values.length === 1) {
+        const only = values[0]!;
+        if (attr.id.endsWith('_HOMOLOGATION_NUMBER') && only.name) return { value_name: only.name };
+        if (only.id) return { value_id: only.id };
+        if (only.name) return { value_name: only.name };
+      }
+
+      const normalizedValues = values.map((v) => ({
+        id: v.id?.trim(),
+        name: v.name?.trim(),
+        norm: this.normalizeAttrText(v.name?.trim() ?? ''),
+      }));
+
+      for (const candidate of cleaned) {
+        const normCandidate = this.normalizeAttrText(candidate);
+        if (!normCandidate) continue;
+        const exact = normalizedValues.find((v) => v.norm && v.norm === normCandidate);
+        if (exact) {
+          if (attr.id.endsWith('_HOMOLOGATION_NUMBER') && exact.name) return { value_name: exact.name };
+          if (exact.id) return { value_id: exact.id };
+          if (exact.name) return { value_name: exact.name };
+        }
+        const partial = normalizedValues.find((v) => v.norm && (v.norm.includes(normCandidate) || normCandidate.includes(v.norm)));
+        if (partial) {
+          if (attr.id.endsWith('_HOMOLOGATION_NUMBER') && partial.name) return { value_name: partial.name };
+          if (partial.id) return { value_id: partial.id };
+          if (partial.name) return { value_name: partial.name };
+        }
+      }
+    }
+
+    const fallback = cleaned[0];
+    if (!fallback) return null;
+    return { value_name: fallback };
+  }
+
+  private guessRequiredAttributeValue(
+    attr: MlCategoryAttribute,
+    draft: ListingDraft,
+    vision: VisionResult | undefined,
+  ): { value_id?: string; value_name?: string } | null {
+    const id = attr.id.toUpperCase();
+    const condition = draft.condition;
+
+    const fromVision = {
+      brand: vision?.product.brand ?? null,
+      model: vision?.product.model ?? null,
+      color: vision?.product.color ?? null,
+      material: vision?.product.material ?? null,
+    };
+
+    if (id === 'BRAND') return this.pickAttributeOption(attr, [fromVision.brand]);
+    if (id === 'MODEL') return this.pickAttributeOption(attr, [fromVision.model]);
+    if (id === 'COLOR' || id === 'MAIN_COLOR') return this.pickAttributeOption(attr, [fromVision.color]);
+    if (id === 'MATERIAL') return this.pickAttributeOption(attr, [fromVision.material]);
+
+    if (id === 'ITEM_CONDITION') {
+      if (condition === 'new') return this.pickAttributeOption(attr, ['novo', 'new']);
+      if (condition === 'used') return this.pickAttributeOption(attr, ['usado', 'used']);
+      if (condition === 'refurbished') return this.pickAttributeOption(attr, ['recondicionado', 'refurbished', 'remanufaturado']);
+    }
+
+    if (id === 'WARRANTY_TYPE') {
+      if (condition === 'used') return this.pickAttributeOption(attr, ['sem garantia', 'without warranty']);
+      return this.pickAttributeOption(attr, ['garantia do vendedor', 'sem garantia']);
+    }
+
+    if (id === 'EMPTY_GTIN_REASON') {
+      return this.pickAttributeOption(attr, ['outro motivo', 'nao se aplica', 'não se aplica']);
+    }
+
+    if (id === 'UNITS_PER_PACK' || id === 'PACKAGE_QUANTITY' || id === 'UNITS_PER_PACKAGE') {
+      return this.pickAttributeOption(attr, ['1']);
+    }
+
+    if (id.endsWith('_HOMOLOGATION_NUMBER')) {
+      const current = draft.attributes[attr.id];
+      if (current?.value_name) return { value_name: current.value_name };
+      return null;
+    }
+
+    return this.pickAttributeOption(attr, []);
+  }
+
+  private autoFillRequiredAttributes(
+    draft: ListingDraft,
+    vision: VisionResult | undefined,
+    categoryAttrs: MlCategoryAttribute[] | null,
+    specificAttrIds?: string[],
+  ): string[] {
+    if (!draft.category_id || !categoryAttrs?.length) return [];
+
+    const requestedIds = new Set((specificAttrIds ?? []).map((id) => id.trim()).filter(Boolean));
+    const targetAttrs = categoryAttrs.filter((a) => (a.tags as any)?.required === true || requestedIds.has(a.id));
+    const filled: string[] = [];
+
+    for (const attr of targetAttrs) {
+      if (hasAttributeValue(draft.attributes[attr.id])) continue;
+      const guess = this.guessRequiredAttributeValue(attr, draft, vision);
+      if (!guess || (!guess.value_id && !guess.value_name)) continue;
+      draft.attributes[attr.id] = guess;
+      filled.push(attr.id);
+    }
+    return filled;
+  }
+
+  private mergePreferredDescription(mlDescription: string | null, draftDescription: string): string {
+    const ml = mlDescription?.trim() ?? '';
+    const draft = draftDescription.trim();
+    if (!ml) return draft;
+    if (!draft) return ml;
+
+    const mlNorm = this.normalizeAttrText(ml).slice(0, 200);
+    const draftNorm = this.normalizeAttrText(draft).slice(0, 200);
+    if (mlNorm && draftNorm && (mlNorm.includes(draftNorm) || draftNorm.includes(mlNorm))) return draft;
+
+    return [ml, '---', 'Ajustes e complementos do bot:', draft].join('\n\n');
+  }
+
 	  private async generatePreview(sessionId: string, quotedMsg: WAMessage): Promise<void> {
 	    const db = await this.store.read();
 	    const s = db.sessions[sessionId];
@@ -1183,6 +1319,11 @@ export class WhatsAppMlBot {
 	      }
 	    }
 
+	    let autoFilledAttrs: string[] = [];
+	    if (draft.category_id && categoryAttrs) {
+	      autoFilledAttrs = this.autoFillRequiredAttributes(draft, s.vision, categoryAttrs);
+	    }
+
 	    const missing: string[] = [];
 	    if (!draft.category_id) missing.push('categoria_id');
 	    if (draft.condition === 'unknown') missing.push('condicao');
@@ -1226,7 +1367,7 @@ export class WhatsAppMlBot {
       return;
     }
 
-	    const preview = this.buildPreviewMessage(s, draft, missing, missingRequiredAttrs, warnings);
+	    const preview = this.buildPreviewMessage(s, draft, missing, missingRequiredAttrs, warnings, autoFilledAttrs);
 	    await this.reply(s.groupId, preview, quotedMsg);
 	  }
 
@@ -1236,6 +1377,7 @@ export class WhatsAppMlBot {
 	    missing: string[],
 	    missingRequiredAttrs: Array<{ id: string; name: string; value_type?: string; values?: MlCategoryAttribute['values'] }>,
 	    warnings: string[],
+	    autoFilledAttrs: string[],
 	  ): string {
 	    if (!draft) return 'Erro: draft vazio.';
 
@@ -1262,6 +1404,13 @@ export class WhatsAppMlBot {
 	      lines.push('*Atenção*');
 	      warnings.slice(0, 8).forEach((w) => lines.push(`- ${w}`));
 	      if (warnings.length > 8) lines.push(`- (+${warnings.length - 8} avisos)`);
+	    }
+
+	    if (autoFilledAttrs.length) {
+	      lines.push('');
+	      lines.push('*Preenchido automaticamente para melhorar qualidade*');
+	      autoFilledAttrs.slice(0, 10).forEach((id) => lines.push(`- ${id}`));
+	      if (autoFilledAttrs.length > 10) lines.push(`- (+${autoFilledAttrs.length - 10} campos)`);
 	    }
 
 	    if (missing.length || missingRequiredAttrs.length) {
@@ -1348,12 +1497,62 @@ export class WhatsAppMlBot {
 	      }
 
         await this.sendToGroup(groupId, 'Etapa 2/4: criando item no Mercado Livre...');
-      const runtime = this.settings.get();
-	      const payload = buildCreateItemPayload(s.draft, pictureIds, {
-        buyingMode: runtime.ml_buying_mode,
-        listingTypeId: runtime.ml_listing_type_id,
-      });
-	      created = await this.ml.createItem(payload);
+        const runtime = this.settings.get();
+        const publishDraft: ListingDraft = {
+          ...s.draft,
+          attributes: { ...s.draft.attributes },
+        };
+        const categoryAttrs = publishDraft.category_id ? await this.ml.getCategoryAttributes(publishDraft.category_id).catch(() => null) : null;
+        const autoFilledOnPublish = new Set<string>();
+
+        let payload = buildCreateItemPayload(publishDraft, pictureIds, {
+          buyingMode: runtime.ml_buying_mode,
+          listingTypeId: runtime.ml_listing_type_id,
+        });
+
+        // Validate/create loop: auto-fill required ML attributes when possible before asking user.
+        let createErr: any = null;
+        for (let attempt = 1; attempt <= 3; attempt += 1) {
+          try {
+            await this.ml.validateItem(payload);
+          } catch (validateErr: any) {
+            const needed = this.extractAttributeIdsFromMlError(validateErr);
+            const filled = this.autoFillRequiredAttributes(publishDraft, s.vision, categoryAttrs, needed);
+            if (filled.length) {
+              filled.forEach((id) => autoFilledOnPublish.add(id));
+              payload = buildCreateItemPayload(publishDraft, pictureIds, {
+                buyingMode: runtime.ml_buying_mode,
+                listingTypeId: runtime.ml_listing_type_id,
+              });
+            }
+          }
+
+          try {
+            created = await this.ml.createItem(payload);
+            break;
+          } catch (err: any) {
+            createErr = err;
+            const needed = this.extractAttributeIdsFromMlError(err);
+            const filled = this.autoFillRequiredAttributes(publishDraft, s.vision, categoryAttrs, needed);
+            if (!filled.length) break;
+            filled.forEach((id) => autoFilledOnPublish.add(id));
+            await this.sendToGroup(groupId, `Ajustando automaticamente exigências do ML: ${filled.join(', ')}`);
+            payload = buildCreateItemPayload(publishDraft, pictureIds, {
+              buyingMode: runtime.ml_buying_mode,
+              listingTypeId: runtime.ml_listing_type_id,
+            });
+          }
+        }
+        if (!created) throw createErr ?? new Error('Falha ao criar item no ML');
+
+        if (autoFilledOnPublish.size) {
+          await this.store.update((db2) => {
+            const s2 = db2.sessions[sessionId];
+            if (!s2?.draft) return;
+            s2.draft.attributes = publishDraft.attributes;
+            s2.updatedAt = nowMs();
+          });
+        }
 
 	      // Persist the created item ID immediately so we don't lose it on partial failures.
 	      await this.store.update((db2) => {
@@ -1376,7 +1575,12 @@ export class WhatsAppMlBot {
 	      }
 
         await this.sendToGroup(groupId, 'Etapa 4/4: atualizando descrição...');
-	      await this.ml.setDescription(created.id, s.draft.description_ptbr);
+        const mlDescription = await this.ml.getDescription(created.id).catch((err) => {
+          logger.warn({ err, itemId: created?.id }, 'failed to fetch ML generated description');
+          return null;
+        });
+        const finalDescription = this.mergePreferredDescription(mlDescription, publishDraft.description_ptbr);
+	      await this.ml.setDescription(created.id, finalDescription);
 
 	      // Best-effort pause again.
 	      try {

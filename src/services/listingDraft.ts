@@ -1,4 +1,5 @@
 import type { ItemCondition, ListingDraft, PriceAnalysis, VisionResult } from '../types.js';
+import { formatBRL } from '../utils/format.js';
 import { parseUserAttributeValue } from '../utils/mlAttributes.js';
 
 function parseNumberLoose(v: string): number | null {
@@ -23,6 +24,13 @@ function clampTitle(title: string): string {
   const t = title.trim().replace(/\s+/g, ' ');
   if (t.length <= 60) return t;
   return t.slice(0, 60).trim();
+}
+
+function conditionLabel(cond: ItemCondition): string {
+  if (cond === 'new') return 'Novo';
+  if (cond === 'used') return 'Usado';
+  if (cond === 'refurbished') return 'Recondicionado';
+  return 'Nao informado';
 }
 
 export function buildListingDraft(params: {
@@ -65,24 +73,60 @@ export function buildListingDraft(params: {
   })();
 
   const descriptionBase = vision.listing.description_ptbr.trim();
-  const extraLines: string[] = [];
-
-  const obs = input.observacoes ?? input.observações ?? input.obs;
-  if (obs) extraLines.push(`Observações do vendedor: ${obs}`);
-
-  const defects = input.defeitos ?? input.avarias ?? input.problemas;
-  if (defects) extraLines.push(`Defeitos/avarias: ${defects}`);
-
-  const includes = input.acompanha ?? input.itens ?? input.incluso;
-  if (includes) extraLines.push(`O que acompanha (info do vendedor): ${includes}`);
-
-  const description =
-    extraLines.length === 0
-      ? descriptionBase
-      : `${descriptionBase}\n\n---\n\n${extraLines.map((l) => `- ${l}`).join('\n')}`;
-
   const brandRaw = (input.marca ?? input.brand ?? '').trim() || vision.product.brand || '';
   const modelRaw = (input.modelo ?? input.model ?? '').trim() || vision.product.model || '';
+
+  const sections: string[] = [];
+  sections.push(descriptionBase);
+
+  const ficha: string[] = [];
+  if (brandRaw) ficha.push(`Marca: ${brandRaw}`);
+  if (modelRaw) ficha.push(`Modelo: ${modelRaw}`);
+  if (vision.product.variant) ficha.push(`Versao/Variante: ${vision.product.variant}`);
+  if (vision.product.color) ficha.push(`Cor: ${vision.product.color}`);
+  if (vision.product.material) ficha.push(`Material: ${vision.product.material}`);
+  ficha.push(`Condicao: ${conditionLabel(condition)}`);
+  ficha.push(`Quantidade: ${quantity}`);
+  if (price) {
+    ficha.push(
+      `Faixa de mercado observada: ${formatBRL(price.p25)} a ${formatBRL(price.p75)} (mediana ${formatBRL(price.median)})`,
+    );
+  }
+  if (ficha.length) {
+    sections.push(['Ficha rapida:', ...ficha.map((l) => `- ${l}`)].join('\n'));
+  }
+
+  const includedLines: string[] = [];
+  const includes = input.acompanha ?? input.itens ?? input.incluso;
+  if (includes) includedLines.push(includes);
+  if (vision.product.included?.length) {
+    for (const v of vision.product.included.slice(0, 8)) {
+      if (!includedLines.some((i) => i.toLowerCase() === v.toLowerCase())) includedLines.push(v);
+    }
+  }
+  if (includedLines.length) {
+    sections.push(['O que acompanha:', ...includedLines.map((l) => `- ${l}`)].join('\n'));
+  }
+
+  const defectsLines: string[] = [];
+  const defects = input.defeitos ?? input.avarias ?? input.problemas;
+  if (defects) defectsLines.push(defects);
+  if (vision.product.defects?.length) {
+    for (const v of vision.product.defects.slice(0, 8)) {
+      if (!defectsLines.some((i) => i.toLowerCase() === v.toLowerCase())) defectsLines.push(v);
+    }
+  }
+  if (defectsLines.length) {
+    sections.push(['Defeitos/avarias informados:', ...defectsLines.map((l) => `- ${l}`)].join('\n'));
+  }
+
+  const obs = input.observacoes ?? input.observações ?? input.obs;
+  if (obs) sections.push(['Observacoes do vendedor:', `- ${obs}`].join('\n'));
+  if (vision.product.notes?.length) {
+    sections.push(['Observacoes adicionais identificadas nas fotos:', ...vision.product.notes.slice(0, 6).map((n) => `- ${n}`)].join('\n'));
+  }
+
+  const description = sections.filter(Boolean).join('\n\n---\n\n');
 
   const attributes: ListingDraft['attributes'] = {};
   const brand = brandRaw ? parseUserAttributeValue(brandRaw) : null;

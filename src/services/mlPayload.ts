@@ -24,6 +24,8 @@ export function buildCreateItemPayload(
     pictures: pictureIds.map((id) => ({ id })),
     attributes: Object.entries(draft.attributes)
       .map(([id, value]) => {
+        // Some homologation attributes are accepted only as value_name in create calls.
+        if (id.endsWith('_HOMOLOGATION_NUMBER') && value.value_name) return { id, value_name: value.value_name };
         if (value.value_id) return { id, value_id: value.value_id };
         if (value.value_name) return { id, value_name: value.value_name };
         return null;
